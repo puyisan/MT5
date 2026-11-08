@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.03"
+#property version   "1.04"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -32,6 +32,7 @@ input bool            InpWinAM             = true;           // 10:00-11:00 NY
 input bool            InpWinPM             = false;          // 14:00-15:00 NY
 input int             InpSweepLeadMin      = 30;             // Minutos previos en que un barrido cuenta
 input int             InpMaxBarsSweepToFVG = 20;             // Velas máx. entre barrido y FVG
+input int             InpNoNewOrderLastMin = 10;             // Sin órdenes nuevas en los últimos N min de la ventana
 
 input group "=== Fair Value Gap ==="
 input ENUM_TIMEFRAMES InpExecTF            = PERIOD_M1;      // TF de ejecución / FVG
@@ -56,6 +57,12 @@ input int             InpReclaimBars       = 3;              // Velas para recup
 input bool            InpRequireMSS        = false;          // Exigir Market Structure Shift
 input int             InpMSSPivotN         = 2;              // Fuerza del pivote para el MSS
 input int             InpTargetMinPrio     = 3;              // Prioridad mínima del pool objetivo (1-5)
+input int             InpMinSweepPrio      = 2;              // Prioridad mínima del pool barrido (1=swing M5, 3=EQ/sesión, 5=PDH/PDL)
+
+input group "=== Sesgo (bias) ==="
+input ENUM_SB_BIAS    InpBiasMode          = BIAS_EMA;       // Filtro de sesgo
+input ENUM_TIMEFRAMES InpBiasTF            = PERIOD_H1;      // TF del sesgo (modo EMA)
+input int             InpBiasEMA           = 50;             // Periodo EMA del sesgo
 
 input group "=== Riesgo ==="
 input double          InpRiskPct           = 0.5;            // Riesgo por operación (% balance)
@@ -113,6 +120,7 @@ CNewBar       g_barExec, g_barSwing;
 
 int           g_hAtrExec  = INVALID_HANDLE;
 int           g_hAtrSwing = INVALID_HANDLE;
+int           g_hBiasMA   = INVALID_HANDLE;
 double        g_buf[];
 MqlRates      g_rates[];
 
@@ -133,6 +141,7 @@ struct SFunnel
    int               fvgWin, fvgDirMismatch, fvgBeforeSweep, fvgOutOfWindow, fvgNoMSS, fvgCandidates;
    int               rejExposure, rejSpread, rejSLMin, rejSLMax, rejRR, rejKind, rejDaily, rejLots, rejMargin, rejSend;
    int               rejSpreadAbs, rejSpreadPct;
+   int               sweepsLowPrio, fvgBias, rejLate;
    int               placed, filled, expired;
    int               spreadN, spreadMin, spreadMax;
    double            spreadSum;
@@ -352,6 +361,28 @@ void TryEnter(const int w,const SFVG &f)
 //+------------------------------------------------------------------+
 //| ¿El FVG recién confirmado encaja con el barrido en curso?        |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Sesgo: +1 solo compras, -1 solo ventas, 0 = sin datos (no filtra) |
+//+------------------------------------------------------------------+
+int CurrentBias(const double refPrice)
+  {
+   if(InpBiasMode==BIAS_EMA)
+     {
+      double ma[],cl[];
+      if(CopyBuffer(g_hBiasMA,0,1,1,ma)!=1 || CopyClose(_Symbol,InpBiasTF,1,1,cl)!=1) return 0;
+      if(cl[0]>ma[0]) return +1;
+      if(cl[0]<ma[0]) return -1;
+      return 0;
+     }
+   if(InpBiasMode==BIAS_PD_RANGE)
+     {
+      const double h=g_liq.PDH(), l=g_liq.PDL();
+      if(h<=0.0 || l<=0.0 || h<=l) return 0;
+      return (refPrice<(h+l)*0.5)?+1:-1;      // discount -> compras; premium -> ventas
+     }
+   return 0;
+  }
+
 void EvaluateFVG(const int w,const SFVG &f)
   {
    const bool dirOk  =(f.dir==-g_sweep.side);
@@ -361,7 +392,24 @@ void EvaluateFVG(const int w,const SFVG &f)
    else if(!afterOk) g_fn.fvgBeforeSweep++;
    else if(!winOk)   g_fn.fvgOutOfWindow++;
    else if(!g_mssOk) { g_fn.fvgNoMSS++; Log("FVG válido pero sin MSS confirmado"); }
-   else              { g_fn.fvgCandidates++; TryEnter(w,f); }
+   else
+     {
+      const int b=(InpBiasMode==BIAS_OFF)?0:CurrentBias(f.ce);
+      if(b!=0 && b!=f.dir)
+        {
+         g_fn.fvgBias++;
+         Log(StringFormat("FVG %s descartado por sesgo (%s)",(f.dir>0)?"alcista":"bajista",EnumToString(InpBiasMode)));
+         return;
+        }
+      if(InpNoNewOrderLastMin>0 && (long)(g_clock.WindowEnd(w)-TimeCurrent())<(long)InpNoNewOrderLastMin*60)
+        {
+         g_fn.rejLate++;
+         Log(StringFormat("FVG descartado: quedan menos de %d min de ventana",InpNoNewOrderLastMin));
+         return;
+        }
+      g_fn.fvgCandidates++;
+      TryEnter(w,f);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -394,7 +442,9 @@ void OnNewExecBar(void)
    SFVG f;        ZeroMemory(f);
    SSweepEvent e; ZeroMemory(e);
    const bool hasFvg  =g_fvg.OnNewBar(g_rates,atrExec,spread,f);
-   const bool hasSweep=g_liq.CheckSweeps(g_rates[0],atrExec,e);
+   bool hasSweep=g_liq.CheckSweeps(g_rates[0],atrExec,e);
+   const bool lowPrioSweep=(hasSweep && e.priority<InpMinSweepPrio);
+   if(lowPrioSweep) hasSweep=false;               // swing menor: el pool queda consumido, sin señal
    if(hasFvg) DrawFVG(f);
 
    //--- ventana (por la hora de apertura de la vela cerrada: coherente en tester)
@@ -404,6 +454,7 @@ void OnNewExecBar(void)
    if(w<0) { UpdateStatus(); return; }
 
    if(hasFvg) g_fn.fvgWin++;
+   if(lowPrioSweep) g_fn.sweepsLowPrio++;
 
    switch(g_state)
      {
@@ -490,6 +541,13 @@ int OnInit()
    g_hAtrSwing=iATR(_Symbol,InpSwingTF,InpATRPeriod);
    if(g_hAtrExec==INVALID_HANDLE || g_hAtrSwing==INVALID_HANDLE)
      { PrintFormat("No se pudo crear iATR (err=%d)",GetLastError()); return INIT_FAILED; }
+   if(InpBiasMode==BIAS_EMA)
+     {
+      ResetLastError();
+      g_hBiasMA=iMA(_Symbol,InpBiasTF,InpBiasEMA,0,MODE_EMA,PRICE_CLOSE);
+      if(g_hBiasMA==INVALID_HANDLE)
+        { PrintFormat("No se pudo crear iMA de sesgo (err=%d)",GetLastError()); return INIT_FAILED; }
+     }
 
    //--- módulos
    g_fvg.Init(InpExecTF,InpMinGapPts,InpMinGapATR,InpDispATR,InpMinBodyRatio,InpFVGExpiryBars,InpMinGapSpread);
@@ -509,9 +567,12 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s",
+   PrintFormat("SilverBullet v1.04 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
-               InpBrokerGMTWinter,EnumToString(InpBrokerDST));
+               InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
+   if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)
+      PrintFormat("Aviso: divisa de cuenta '%s'. En el tester elige USD en lugar de 'pips' para que comisión y riesgo sean reales.",
+                  AccountInfoString(ACCOUNT_CURRENCY));
    return INIT_SUCCEEDED;
   }
 
@@ -525,9 +586,12 @@ void PrintFunnel(void)
    PrintFormat("Ventanas activas .............. %d",g_fn.windows);
    PrintFormat("Barridos que abren contexto ... %d  (reemplazados %d, ignorados menores %d, caducados sin FVG %d)",
                g_fn.sweeps,g_fn.sweepsReplaced,g_fn.sweepsIgnored,g_fn.sweepsExpired);
+   PrintFormat("Barridos bajo prioridad mínima  %d  (InpMinSweepPrio=%d)",g_fn.sweepsLowPrio,InpMinSweepPrio);
    PrintFormat("FVG detectados en ventana ..... %d",g_fn.fvgWin);
    PrintFormat("  con contexto SWEPT, descartados: dirección %d | previos al barrido %d | fuera de ventana %d | sin MSS %d",
                g_fn.fvgDirMismatch,g_fn.fvgBeforeSweep,g_fn.fvgOutOfWindow,g_fn.fvgNoMSS);
+   PrintFormat("                                   contra sesgo %d | últimos %d min de ventana %d",
+               g_fn.fvgBias,InpNoNewOrderLastMin,g_fn.rejLate);
    PrintFormat("FVG candidatos a entrada ...... %d",g_fn.fvgCandidates);
    PrintFormat("  spread en candidatos (pts): min %d | medio %.1f | max %d",
                g_fn.spreadMin,(g_fn.spreadN>0)?g_fn.spreadSum/g_fn.spreadN:0.0,g_fn.spreadMax);
@@ -547,6 +611,7 @@ void OnDeinit(const int reason)
    if(!MQLInfoInteger(MQL_OPTIMIZATION)) PrintFunnel();
    if(g_hAtrExec !=INVALID_HANDLE) IndicatorRelease(g_hAtrExec);
    if(g_hAtrSwing!=INVALID_HANDLE) IndicatorRelease(g_hAtrSwing);
+   if(g_hBiasMA  !=INVALID_HANDLE) IndicatorRelease(g_hBiasMA);
    ObjectsDeleteAll(0,SB_OBJ_PREFIX);
    Comment("");
   }

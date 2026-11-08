@@ -38,8 +38,17 @@ Al iniciar, revisa el log:
 4. SL detrás del extremo del barrido; TP en el pool opuesto (draw on liquidity) con R:R mínimo, o un R:R fijo si no hay pool.
 5. La orden limitada caduca al final de la ventana. 1 operación por ventana. Break-even a 1R y cierre por tiempo máximo.
 
+### Filtros de calidad (v1.04)
+- `InpMinSweepPrio` (por defecto 2): solo abren contexto los barridos de pools relevantes
+  (EQH/EQL y sesiones = 3, Londres = 4, PDH/PDL = 5). Los swings simples de M5 (prioridad 1) se ignoran.
+- `InpBiasMode`: `BIAS_EMA` (cierre H1 vs EMA 50: compras arriba, ventas abajo), `BIAS_PD_RANGE`
+  (compras bajo el 50% del rango del día anterior, ventas encima) u `BIAS_OFF`.
+- `InpNoNewOrderLastMin` (por defecto 10): sin órdenes nuevas en los últimos N minutos de la ventana.
+
 ### Notas de backtesting
 - Usa "Cada tick basado en ticks reales" para M1.
+- **Depósito en USD, no en pips**: en la pestaña *Configuración* del tester, en el desplegable de divisa junto al
+  depósito elige `USD` (no `pips`). En modo pips no se aplica la comisión y el informe no está en dinero.
 - Ajusta `InpCommissionPerLot` al tipo de cuenta Equiti (0 si la cuenta no cobra comisión).
 - Spread: `InpMaxSpreadSLPct` (spread máx. como % del SL, por defecto 20%) y `InpMaxSpreadAbsPts` (tope absoluto, 0 = off).
 - Si cambias de versión, pulsa "Restablecer" en la pestaña Parámetros del tester: MT5 conserva los valores usados la última vez.

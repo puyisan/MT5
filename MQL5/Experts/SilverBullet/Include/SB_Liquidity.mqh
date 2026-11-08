@@ -25,6 +25,8 @@ private:
    double            m_minPenPts;
    double            m_maxPenATR;
    double            m_eqTolATR;
+   double            m_pdh;
+   double            m_pdl;
    bool              m_useSwings;
    bool              m_builtLon;
    bool              m_builtNYAM;
@@ -60,6 +62,8 @@ public:
    bool              CheckSweeps(const MqlRates &bar,const double atrExec,SSweepEvent &ev);
    bool              NearestTarget(const int tradeDir,const double entry,const int minPrio,double &target) const;
    int               Total(void) const { return ArraySize(m_pools); }
+   double            PDH(void) const { return m_pdh; }   // 0 si no disponible
+   double            PDL(void) const { return m_pdl; }
    bool              GetPool(const int i,SLiqPool &p) const
      { if(i<0 || i>=ArraySize(m_pools)) return false; p=m_pools[i]; return true; }
   };
@@ -67,6 +71,7 @@ public:
 //+------------------------------------------------------------------+
 CLiquidityMap::CLiquidityMap(void) : m_swingTF(PERIOD_M5),m_swingN(3),m_reclaimBars(3),m_swingPrio(1),
                                      m_minPenPts(2),m_maxPenATR(3),m_eqTolATR(0.1),m_useSwings(true),
+                                     m_pdh(0),m_pdl(0),
                                      m_builtLon(false),m_builtNYAM(false),m_lastPivotH(0),m_lastPivotL(0)
   {
    ArraySetAsSeries(m_sw,true);
@@ -253,6 +258,7 @@ void CLiquidityMap::Compact(void)
 void CLiquidityMap::OnNewDay(CNYClock &clk,const datetime now,const double atrSwing)
   {
    ArrayResize(m_pools,0);
+   m_pdh=0; m_pdl=0;
    m_builtLon=false; m_builtNYAM=false;
    m_lastPivotH=0;   m_lastPivotL=0;
 
@@ -268,6 +274,7 @@ void CLiquidityMap::OnNewDay(CNYClock &clk,const datetime now,const double atrSw
         {
          AddPool(POOL_PDH,+1,hi,toSrv,5);
          AddPool(POOL_PDL,-1,lo,toSrv,5);
+         m_pdh=hi; m_pdl=lo;
          break;
         }
       endNY-=86400;

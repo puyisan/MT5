@@ -25,6 +25,14 @@ enum ENUM_SB_ENTRY
    ENTRY_CE  =1  // Consequent Encroachment 50% (mejor R:R)
   };
 
+//--- Filtro de sesgo (dirección permitida)
+enum ENUM_SB_BIAS
+  {
+   BIAS_OFF=0,       // Sin filtro de sesgo
+   BIAS_EMA=1,       // Tendencia: cierre TF sesgo vs EMA (compras arriba, ventas abajo)
+   BIAS_PD_RANGE=2   // Premium/Discount vs rango del día anterior (compras bajo el 50%)
+  };
+
 //--- Máquina de estados por ventana
 enum ENUM_SB_STATE
   {
