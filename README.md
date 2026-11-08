@@ -49,7 +49,7 @@ Al iniciar, revisa el log:
 - Usa "Cada tick basado en ticks reales" para M1.
 - **Depósito en USD, no en pips**: en la pestaña *Configuración* del tester, en el desplegable de divisa junto al
   depósito elige `USD` (no `pips`). En modo pips no se aplica la comisión y el informe no está en dinero.
-- Ajusta `InpCommissionPerLot` al tipo de cuenta Equiti (0 si la cuenta no cobra comisión).
+- `InpCommissionPerLot` = 0 por defecto (cuenta Equiti estándar `.sd`, sin comisión; el coste va en el spread ~1,8 pips). Ponlo en ~7 si usas una cuenta con comisión.
 - Spread: `InpMaxSpreadSLPct` (spread máx. como % del SL, por defecto 20%) y `InpMaxSpreadAbsPts` (tope absoluto, 0 = off).
 - Si cambias de versión, pulsa "Restablecer" en la pestaña Parámetros del tester: MT5 conserva los valores usados la última vez.
 - `OnTester()` devuelve `PF * sqrt(trades) * (1 - DD%)` para la optimización personalizada.

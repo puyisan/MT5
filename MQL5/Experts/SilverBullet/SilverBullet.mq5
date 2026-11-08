@@ -68,7 +68,7 @@ input group "=== Riesgo ==="
 input double          InpRiskPct           = 0.5;            // Riesgo por operación (% balance)
 input bool            InpRiskOnEquity      = false;          // Calcular sobre equity
 input double          InpMaxDailyLossPct   = 2.0;            // Pérdida diaria máx. (%), 0 = off
-input double          InpCommissionPerLot  = 7.0;            // Comisión ida+vuelta por lote (divisa cuenta)
+input double          InpCommissionPerLot  = 0.0;            // Comisión ida+vuelta por lote (divisa cuenta). Equiti estándar = 0
 input double          InpMaxSpreadSLPct    = 20.0;           // Spread máximo (% de la distancia del SL), 0 = off
 input int             InpMaxSpreadAbsPts   = 0;              // Tope absoluto de spread (puntos), 0 = off
 input int             InpSlippagePts       = 5;              // Slippage máximo (puntos)
