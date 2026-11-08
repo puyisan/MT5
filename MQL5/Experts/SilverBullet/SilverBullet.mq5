@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.06"
+#property version   "1.07"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -27,9 +27,9 @@ input ENUM_BROKER_DST InpBrokerDST         = BROKER_DST_US;  // Regla DST del se
 input bool            InpValidateHistory   = true;           // Validar DST con aperturas semanales
 
 input group "=== Ventanas Silver Bullet (hora NY) ==="
-input bool            InpWinLondon         = false;          // 03:00-04:00 NY
-input bool            InpWinAM             = true;           // 10:00-11:00 NY
-input bool            InpWinPM             = false;          // 14:00-15:00 NY
+input bool            InpWinLondon         = true;           // 03:00-04:00 NY (servidor Equiti 10:00)
+input bool            InpWinAM             = true;           // 10:00-11:00 NY (servidor Equiti 17:00)
+input bool            InpWinPM             = true;           // 14:00-15:00 NY (servidor Equiti 21:00)
 input int             InpSweepLeadMin      = 30;             // Minutos previos en que un barrido cuenta
 input int             InpMaxBarsSweepToFVG = 20;             // Velas máx. entre barrido y FVG
 input int             InpNoNewOrderLastMin = 0;              // Sin órdenes nuevas en los últimos N min de la ventana (0 = off)
@@ -579,7 +579,7 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.06 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.07 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)

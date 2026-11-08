@@ -60,7 +60,23 @@ Al iniciar, revisa el log:
 | **C** | **prio 2, sin sesgo (defaults v1.05)** | **6** | **+1091** | **0,81 %** |
 | D | C + ventanas Londres y PM | 9 | +870 | 2,50 % (gap de fin de semana, corregido en v1.06) |
 
+Validación fuera de muestra (2025, modelo "1 minuto OHLC", que reproduce los ticks reales en 2026: +1093 vs +1091):
+
+| Prueba | Configuración | Trades | Neto USD | DD equity |
+|---|---|---|---|---|
+| F | v1.06, solo AM, jun-dic 2025 | 6 | +455 (pips) | 1,14 % |
+| **G** | **v1.06, 3 ventanas, 06-01 a 31-12-2025 (= defaults v1.07)** | **23** | **+711** | **2,86 %** |
+
+Por ventana (2025 / 2026): Londres +458 / +167 · AM −26 / +1077 · PM +279 / −374 (incl. gap).
+Ninguna ventana gana todos los años; las tres juntas son positivas en ambos. Por eso v1.07 activa las tres.
+
 Muestra pequeña y elegida dentro de la propia muestra: pendiente de validar fuera de muestra (2025) y en demo.
+
+### Puesta en demo (v1.07)
+- El terminal debe estar activo a las 10:00, 17:00 y 21:00 del servidor (VPS o PC 24 h).
+- Adjunta el EA a un gráfico de EURUSD.sd, activa *Trading algorítmico* y verifica en *Expertos*:
+  `SilverBullet v1.07 iniciado` y `offset broker +2.0h coherente con el modelo`.
+- Compara cada semana las operaciones de demo con un backtest de esa misma semana (fills y slippage).
 
 ### Notas de backtesting
 - Usa "Cada tick basado en ticks reales" para M1.
