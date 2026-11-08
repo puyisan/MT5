@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.00"
+#property version   "1.01"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -124,6 +124,16 @@ bool          g_mssOk     = false;
 bool          g_verbose   = true;
 bool          g_draw      = false;
 
+//--- embudo de diagnóstico (se imprime al terminar el backtest / quitar el EA)
+struct SFunnel
+  {
+   int               days, windows, sweeps, sweepsReplaced, sweepsIgnored, sweepsExpired;
+   int               fvgWin, fvgDirMismatch, fvgBeforeSweep, fvgOutOfWindow, fvgNoMSS, fvgCandidates;
+   int               rejExposure, rejSpread, rejSLMin, rejSLMax, rejRR, rejKind, rejDaily, rejLots, rejMargin, rejSend;
+   int               placed, filled, expired;
+  };
+SFunnel       g_fn;
+
 //+------------------------------------------------------------------+
 void Log(const string s) { if(g_verbose) Print(s); }
 
@@ -208,6 +218,7 @@ double FindMSSLevel(const SSweepEvent &ev)
 
 void StartSweep(const SSweepEvent &ev)
   {
+   g_fn.sweeps++;
    g_sweep    =ev;
    g_sweepBars=0;
    g_state    =SB_SWEPT;
@@ -236,6 +247,7 @@ void OnWindowChange(const int w)
    if(g_state==SB_ORDER_PLACED && g_exec.HasPending())
      {
       g_exec.CancelPendings();
+      g_fn.expired++;
       Log(StringFormat("[%s] Fin de ventana: orden pendiente cancelada",g_clock.WindowName(g_win)));
      }
    g_win      =w;
@@ -243,6 +255,7 @@ void OnWindowChange(const int w)
    g_sweepBars=0;
    g_mssOk    =false;
    g_mssLevel =0.0;
+   if(w>=0) g_fn.windows++;
    if(w>=0)
       Log(StringFormat("[%s] Ventana activa (servidor %s - %s)",g_clock.WindowName(w),
                        TimeToString(g_clock.WindowStart(w),TIME_MINUTES),
@@ -255,11 +268,11 @@ void OnWindowChange(const int w)
 void TryEnter(const int w,const SFVG &f)
   {
    if(g_exec.HasPosition() || g_exec.HasPending())
-     { Log("Entrada descartada: ya hay exposición del EA"); return; }
+     { g_fn.rejExposure++; Log("Entrada descartada: ya hay exposición del EA"); return; }
 
    int spreadPts=0;
    if(!g_risk.SpreadOK(spreadPts))
-     { Log(StringFormat("Entrada descartada: spread %d > %d",spreadPts,InpMaxSpreadPts)); return; }
+     { g_fn.rejSpread++; Log(StringFormat("Entrada descartada: spread %d > %d",spreadPts,InpMaxSpreadPts)); return; }
    const double spread=spreadPts*_Point;
    const int    dir   =f.dir;
 
@@ -272,7 +285,8 @@ void TryEnter(const int w,const SFVG &f)
 
    double risk=MathAbs(entry-sl);
    if(risk/_Point<InpMinSLPts || risk/_Point>InpMaxSLPts)
-     { Log(StringFormat("Entrada descartada: SL %.0f pts fuera de [%.0f, %.0f]",risk/_Point,InpMinSLPts,InpMaxSLPts)); return; }
+     { if(risk/_Point<InpMinSLPts) g_fn.rejSLMin++; else g_fn.rejSLMax++;
+       Log(StringFormat("Entrada descartada: SL %.0f pts fuera de [%.0f, %.0f]",risk/_Point,InpMinSLPts,InpMaxSLPts)); return; }
 
    //--- TP: draw on liquidity (pool opuesto) o RR fijo
    double target=0.0, tp=0.0;
@@ -284,12 +298,12 @@ void TryEnter(const int w,const SFVG &f)
 
    double rr=dir*(tp-entry)/risk;
    if(rr<InpMinRR)
-     { Log(StringFormat("Entrada descartada: R:R %.2f < %.2f (objetivo %s)",rr,InpMinRR,hasTarget?"pool":"fijo")); return; }
+     { g_fn.rejRR++; Log(StringFormat("Entrada descartada: R:R %.2f < %.2f (objetivo %s)",rr,InpMinRR,hasTarget?"pool":"fijo")); return; }
 
    //--- tipo de orden
    const ENUM_SB_ORDER_KIND kind=g_exec.Decide(dir,entry,sl,tp,InpAllowMarketIfInside);
    if(kind==KIND_INVALID)
-     { Log("Entrada descartada: precio/distancias no válidas para la orden (stops/freeze level)"); return; }
+     { g_fn.rejKind++; Log("Entrada descartada: precio/distancias no válidas para la orden (stops/freeze level)"); return; }
    double effEntry=entry;
    if(kind==KIND_MARKET)
      {
@@ -297,23 +311,40 @@ void TryEnter(const int w,const SFVG &f)
       risk=MathAbs(effEntry-sl);
       rr  =dir*(tp-effEntry)/risk;
       if(rr<InpMinRR || risk/_Point>InpMaxSLPts)
-        { Log(StringFormat("Entrada a mercado descartada: R:R %.2f",rr)); return; }
+        { g_fn.rejRR++; Log(StringFormat("Entrada a mercado descartada: R:R %.2f",rr)); return; }
      }
 
    //--- riesgo de cuenta
-   if(!g_risk.DailyLossOK(g_clock.NYMidnightServer())) return;
+   if(!g_risk.DailyLossOK(g_clock.NYMidnightServer())) { g_fn.rejDaily++;  return; }
    const double lots=g_risk.LotsForRisk(dir,effEntry,sl);
-   if(lots<=0.0) return;
-   if(!g_risk.MarginOK(dir,lots,effEntry)) return;
+   if(lots<=0.0)                                       { g_fn.rejLots++;   return; }
+   if(!g_risk.MarginOK(dir,lots,effEntry))             { g_fn.rejMargin++; return; }
 
    const string cmt=StringFormat("SB %s %s",g_clock.WindowName(w),PoolTypeToString(g_sweep.type));
    ulong ticket=0;
-   if(!g_exec.Place(kind,dir,lots,entry,sl,tp,g_clock.WindowEnd(w),cmt,ticket)) return;
+   if(!g_exec.Place(kind,dir,lots,entry,sl,tp,g_clock.WindowEnd(w),cmt,ticket)) { g_fn.rejSend++; return; }
+   g_fn.placed++;
+   if(kind==KIND_MARKET) g_fn.filled++;
 
    g_state=(kind==KIND_MARKET)?SB_IN_TRADE:SB_ORDER_PLACED;
    Log(StringFormat("[%s] %s %s %.2f lotes | entrada %.5f SL %.5f TP %.5f | R:R %.2f | ticket #%I64u",
                     g_clock.WindowName(w),(kind==KIND_MARKET)?"MERCADO":"LIMIT",(dir>0)?"BUY":"SELL",
                     lots,effEntry,sl,tp,rr,ticket));
+  }
+
+//+------------------------------------------------------------------+
+//| ¿El FVG recién confirmado encaja con el barrido en curso?        |
+//+------------------------------------------------------------------+
+void EvaluateFVG(const int w,const SFVG &f)
+  {
+   const bool dirOk  =(f.dir==-g_sweep.side);
+   const bool afterOk=(f.tC1>=g_sweep.breachTime);
+   const bool winOk  =g_clock.InWindow(w,f.tC3);
+   if(!dirOk)        g_fn.fvgDirMismatch++;
+   else if(!afterOk) g_fn.fvgBeforeSweep++;
+   else if(!winOk)   g_fn.fvgOutOfWindow++;
+   else if(!g_mssOk) { g_fn.fvgNoMSS++; Log("FVG válido pero sin MSS confirmado"); }
+   else              { g_fn.fvgCandidates++; TryEnter(w,f); }
   }
 
 //+------------------------------------------------------------------+
@@ -334,6 +365,7 @@ void OnNewExecBar(void)
      {
       g_liq.OnNewDay(g_clock,now,atrSwing);
       g_fvg.Reset();
+      g_fn.days++;
       Log(StringFormat("Nuevo día NY %s: %d pools de liquidez",
                        TimeToString(g_clock.NYDay(),TIME_DATE),g_liq.Total()));
      }
@@ -354,38 +386,48 @@ void OnNewExecBar(void)
    if(w!=g_win) OnWindowChange(w);
    if(w<0) { UpdateStatus(); return; }
 
+   if(hasFvg) g_fn.fvgWin++;
+
    switch(g_state)
      {
       case SB_IDLE:
-         if(hasSweep) StartSweep(e);
+         if(hasSweep)
+           {
+            StartSweep(e);
+            UpdateMSS(g_rates[0]);
+            if(hasFvg) EvaluateFVG(w,f);       // barrido y FVG confirmados en la misma vela
+           }
          break;
 
       case SB_SWEPT:
         {
-         if(hasSweep)
-            StartSweep(e);                                   // un barrido más reciente redefine el contexto
-         else if(++g_sweepBars>InpMaxBarsSweepToFVG)
+         //--- Un barrido nuevo solo redefine el contexto si es del MISMO lado (nuevo extremo)
+         //--- o de MAYOR prioridad. Así, los swings menores que la propia pierna de
+         //--- desplazamiento perfora/recupera no invierten la dirección buscada.
+         if(hasSweep && (e.side==g_sweep.side || e.priority>g_sweep.priority))
            {
-            Log("Barrido caducado sin FVG válido");
-            g_state=SB_IDLE;
-            break;
+            g_fn.sweepsReplaced++;
+            StartSweep(e);
+           }
+         else
+           {
+            if(hasSweep) g_fn.sweepsIgnored++;
+            if(++g_sweepBars>InpMaxBarsSweepToFVG)
+              {
+               g_fn.sweepsExpired++;
+               Log("Barrido caducado sin FVG válido");
+               g_state=SB_IDLE;
+               break;
+              }
            }
          UpdateMSS(g_rates[0]);
-         if(hasFvg)
-           {
-            const bool dirOk   =(f.dir==-g_sweep.side);
-            const bool timeOk  =(f.tC1>=g_sweep.breachTime) && g_clock.InWindow(w,f.tC3);
-            if(dirOk && timeOk && g_mssOk)
-               TryEnter(w,f);
-            else if(dirOk && timeOk)
-               Log("FVG válido pero sin MSS confirmado");
-           }
+         if(hasFvg) EvaluateFVG(w,f);
          break;
         }
 
       case SB_ORDER_PLACED:
-         if(g_exec.HasPosition())     { g_state=SB_IN_TRADE; Log("Orden limitada ejecutada"); }
-         else if(!g_exec.HasPending()) { g_state=SB_DONE;     Log("Orden pendiente expirada/cancelada"); }
+         if(g_exec.HasPosition())     { g_fn.filled++;  g_state=SB_IN_TRADE; Log("Orden limitada ejecutada"); }
+         else if(!g_exec.HasPending()) { g_fn.expired++; g_state=SB_DONE;     Log("Orden pendiente expirada/cancelada"); }
          break;
 
       case SB_IN_TRADE:
@@ -438,6 +480,7 @@ int OnInit()
    ArraySetAsSeries(g_rates,true);
    ArraySetAsSeries(g_buf,true);
    ZeroMemory(g_sweep);
+   ZeroMemory(g_fn);
    g_state=SB_IDLE; g_win=-1;
 
    //--- avisos de entorno
@@ -453,8 +496,32 @@ int OnInit()
   }
 
 //+------------------------------------------------------------------+
+//| Embudo: dónde se pierden las señales                             |
+//+------------------------------------------------------------------+
+void PrintFunnel(void)
+  {
+   Print("================ SILVER BULLET - EMBUDO DE SEÑALES ================");
+   PrintFormat("Días NY procesados ............ %d",g_fn.days);
+   PrintFormat("Ventanas activas .............. %d",g_fn.windows);
+   PrintFormat("Barridos que abren contexto ... %d  (reemplazados %d, ignorados menores %d, caducados sin FVG %d)",
+               g_fn.sweeps,g_fn.sweepsReplaced,g_fn.sweepsIgnored,g_fn.sweepsExpired);
+   PrintFormat("FVG detectados en ventana ..... %d",g_fn.fvgWin);
+   PrintFormat("  con contexto SWEPT, descartados: dirección %d | previos al barrido %d | fuera de ventana %d | sin MSS %d",
+               g_fn.fvgDirMismatch,g_fn.fvgBeforeSweep,g_fn.fvgOutOfWindow,g_fn.fvgNoMSS);
+   PrintFormat("FVG candidatos a entrada ...... %d",g_fn.fvgCandidates);
+   PrintFormat("  rechazos: exposición %d | spread %d | SL<min %d | SL>max %d | R:R %d | tipo orden %d",
+               g_fn.rejExposure,g_fn.rejSpread,g_fn.rejSLMin,g_fn.rejSLMax,g_fn.rejRR,g_fn.rejKind);
+   PrintFormat("            pérdida diaria %d | lote<mínimo %d | margen %d | envío fallido %d",
+               g_fn.rejDaily,g_fn.rejLots,g_fn.rejMargin,g_fn.rejSend);
+   PrintFormat("Órdenes enviadas .............. %d  (ejecutadas %d, expiradas/canceladas %d)",
+               g_fn.placed,g_fn.filled,g_fn.expired);
+   Print("===================================================================");
+  }
+
+//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   if(!MQLInfoInteger(MQL_OPTIMIZATION)) PrintFunnel();
    if(g_hAtrExec !=INVALID_HANDLE) IndicatorRelease(g_hAtrExec);
    if(g_hAtrSwing!=INVALID_HANDLE) IndicatorRelease(g_hAtrSwing);
    ObjectsDeleteAll(0,SB_OBJ_PREFIX);
