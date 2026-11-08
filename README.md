@@ -46,12 +46,19 @@ Al iniciar, revisa el log:
   llega tras una subida que deja el precio sobre la EMA y bloquea la venta.
 - `InpNoNewOrderLastMin` (por defecto **0** = off): sin órdenes nuevas en los últimos N minutos de la ventana.
 
+### Cierre forzoso del viernes (v1.06)
+- `InpFridayCloseHourNY=16`, `InpFridayCloseMinNY=30`: el viernes a las 16:30 NY se cierran las posiciones del EA,
+  se cancelan las pendientes y no se abren nuevas. Evita que el cierre por tiempo no llegue a ejecutarse antes del
+  cierre semanal (prueba D: una venta del viernes 22-05-2026 en la ventana PM quedó abierta el fin de semana y el
+  gap del lunes la cerró en -275 USD, 2,9R).
+
 ### Resultados de referencia (EURUSD.sd Equiti, 01-01-2026 a 07-11-2026, ticks reales, ventana 10-11 NY)
 | Prueba | Configuración | Trades | Neto USD | DD equity |
 |---|---|---|---|---|
 | A | `InpMinSweepPrio=1`, sin sesgo (≈ v1.03) | 16 | +507 | 2,62 % |
 | B | prio 2 + `BIAS_EMA` + últimos 10 min | 1 | +24 | 0,32 % |
 | **C** | **prio 2, sin sesgo (defaults v1.05)** | **6** | **+1091** | **0,81 %** |
+| D | C + ventanas Londres y PM | 9 | +870 | 2,50 % (gap de fin de semana, corregido en v1.06) |
 
 Muestra pequeña y elegida dentro de la propia muestra: pendiente de validar fuera de muestra (2025) y en demo.
 

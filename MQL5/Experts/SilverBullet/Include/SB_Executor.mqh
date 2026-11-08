@@ -49,6 +49,7 @@ public:
    bool              HasPosition(void);
    bool              HasPending(void);
    bool              CancelPendings(void);
+   int               CloseAll(const string reason);
    void              Manage(const double beAtR,const double beOffsetPts,const int maxHoldSec);
   };
 
@@ -164,6 +165,27 @@ bool CExecutor::HasPending(void)
    for(int i=OrdersTotal()-1;i>=0;i--)
       if(m_ord.SelectByIndex(i) && Mine(m_ord.Symbol(),m_ord.Magic())) return true;
    return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Cierra todas las posiciones del EA. Devuelve nº cerradas.        |
+//+------------------------------------------------------------------+
+int CExecutor::CloseAll(const string reason)
+  {
+   int closed=0;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      if(!m_pos.SelectByIndex(i) || !Mine(m_pos.Symbol(),m_pos.Magic())) continue;
+      const ulong tk=m_pos.Ticket();
+      ResetLastError();
+      if(!m_trade.PositionClose(tk)) { LogFail(StringFormat("PositionClose #%I64u (%s)",tk,reason)); continue; }
+      const uint rc=m_trade.ResultRetcode();
+      if(rc!=TRADE_RETCODE_DONE && rc!=TRADE_RETCODE_DONE_PARTIAL)
+        { LogFail(StringFormat("PositionClose #%I64u (%s)",tk,reason)); continue; }
+      PrintFormat("Executor: posición #%I64u cerrada (%s)",tk,reason);
+      closed++;
+     }
+   return closed;
   }
 
 bool CExecutor::CancelPendings(void)

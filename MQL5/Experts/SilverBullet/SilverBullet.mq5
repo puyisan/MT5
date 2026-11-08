@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.05"
+#property version   "1.06"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -84,6 +84,8 @@ input group "=== Gestión ==="
 input double          InpBEAtR             = 1.0;            // Break-even a X R (0 = off)
 input double          InpBEOffsetPts       = 5;              // Offset del BE (puntos)
 input int             InpMaxHoldMin        = 180;            // Duración máx. de la posición (min, 0 = off)
+input int             InpFridayCloseHourNY = 16;             // Viernes: cierre forzoso, hora NY (<0 = off)
+input int             InpFridayCloseMinNY  = 30;             // Viernes: cierre forzoso, minuto NY
 
 input group "=== General ==="
 input ulong           InpMagic             = 20261108;       // Magic number
@@ -126,6 +128,8 @@ MqlRates      g_rates[];
 
 ENUM_SB_STATE g_state     = SB_IDLE;
 int           g_win       = -1;
+datetime      g_friCutoff = 0;          // hora servidor del cierre forzoso del viernes (0 = hoy no aplica)
+bool          g_friDone   = false;
 SSweepEvent   g_sweep;
 int           g_sweepBars = 0;
 double        g_mssLevel  = 0.0;
@@ -143,6 +147,7 @@ struct SFunnel
    int               rejSpreadAbs, rejSpreadPct;
    int               sweepsLowPrio, fvgBias, rejLate;
    int               placed, filled, expired;
+   int               rejFriday, friCloses;
    int               spreadN, spreadMin, spreadMax;
    double            spreadSum;
   };
@@ -281,6 +286,8 @@ void OnWindowChange(const int w)
 //+------------------------------------------------------------------+
 void TryEnter(const int w,const SFVG &f)
   {
+   if(g_friCutoff>0 && TimeCurrent()>=g_friCutoff)
+     { g_fn.rejFriday++; Log("Entrada descartada: pasado el cierre forzoso del viernes"); return; }
    if(g_exec.HasPosition() || g_exec.HasPending())
      { g_fn.rejExposure++; Log("Entrada descartada: ya hay exposición del EA"); return; }
 
@@ -431,6 +438,11 @@ void OnNewExecBar(void)
       g_liq.OnNewDay(g_clock,now,atrSwing);
       g_fvg.Reset();
       g_fn.days++;
+      //--- cierre forzoso del viernes (evita gaps de fin de semana con la posición abierta)
+      g_friCutoff=0; g_friDone=false;
+      MqlDateTime nd; TimeToStruct(g_clock.NYDay(),nd);
+      if(InpFridayCloseHourNY>=0 && nd.day_of_week==5)
+         g_friCutoff=g_clock.NYToServer(g_clock.NYDay()+InpFridayCloseHourNY*3600+InpFridayCloseMinNY*60);
       Log(StringFormat("Nuevo día NY %s: %d pools de liquidez",
                        TimeToString(g_clock.NYDay(),TIME_DATE),g_liq.Total()));
      }
@@ -567,7 +579,7 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.05 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.06 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)
@@ -602,6 +614,8 @@ void PrintFunnel(void)
                g_fn.rejDaily,g_fn.rejLots,g_fn.rejMargin,g_fn.rejSend);
    PrintFormat("Órdenes enviadas .............. %d  (ejecutadas %d, expiradas/canceladas %d)",
                g_fn.placed,g_fn.filled,g_fn.expired);
+   PrintFormat("Cierres forzosos de viernes ... %d  (entradas bloqueadas tras el corte %d)",
+               g_fn.friCloses,g_fn.rejFriday);
    Print("===================================================================");
   }
 
@@ -619,6 +633,20 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   //--- cierre forzoso del viernes: una comparación de enteros por tick
+   if(g_friCutoff>0 && !g_friDone && TimeCurrent()>=g_friCutoff)
+     {
+      const bool hadPending=g_exec.HasPending();
+      if(hadPending) g_exec.CancelPendings();
+      const int n=g_exec.CloseAll("cierre forzoso viernes");
+      if(n>0 || hadPending)
+        {
+         g_fn.friCloses+=n;
+         Log(StringFormat("Cierre forzoso del viernes (%02d:%02d NY): %d posición(es) cerrada(s)%s",
+                          InpFridayCloseHourNY,InpFridayCloseMinNY,n,hadPending?", pendientes canceladas":""));
+        }
+      if(!g_exec.HasPosition()) g_friDone=true;     // si algo falló, reintenta en el siguiente tick
+     }
    g_exec.Manage(InpBEAtR,InpBEOffsetPts,InpMaxHoldMin*60);   // barato: sale si no hay posiciones
    if(!g_barExec.IsNew(_Symbol,InpExecTF)) return;
    OnNewExecBar();
