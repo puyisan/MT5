@@ -78,6 +78,22 @@ Muestra pequeña y elegida dentro de la propia muestra: pendiente de validar fue
   `SilverBullet v1.07 iniciado` y `offset broker +2.0h coherente con el modelo`.
 - Compara cada semana las operaciones de demo con un backtest de esa misma semana (fills y slippage).
 
+### Prueba de robustez (v1.08)
+Presets en `MQL5/Profiles/Tester/` (cópialos a `<Carpeta de datos>/MQL5/Profiles/Tester/`):
+- `SilverBullet_v108_default.set`: valores por defecto.
+- `SilverBullet_v108_robustez.set`: rejilla 3 x 3 x 3 = 27 pasadas sobre
+  `InpMaxHoldMin` (120/180/240), `InpMaxSpreadSLPct` (15/20/25) e `InpDispATR` (0,8/1,0/1,2).
+
+En el tester: pestaña *Parámetros* → clic derecho → **Cargar** el `.set`; *Optimización*: **Algoritmo completo**,
+criterio **Personalizado máximo**. Periodo 2025-01-01 a 2026-11-07, ticks reales, 19000 USD.
+Exporta los resultados (pestaña *Optimización* → clic derecho → *Exportar a XML*).
+
+Cómo leerlo: **no buscamos la mejor pasada**, sino que la mayoría sea positiva y que los vecinos del valor por
+defecto den resultados parecidos. Si solo funcionan los valores actuales, la estrategia está sobreajustada.
+
+`OnTester()` = PF (acotado a 10; sin pérdidas MT5 reporta PF 0) × √operaciones × (1 − DD%/100). Devuelve 0 con
+menos de `InpTesterMinTrades` (10) operaciones.
+
 ### Notas de backtesting
 - Usa "Cada tick basado en ticks reales" para M1.
 - **Depósito en USD, no en pips**: en la pestaña *Configuración* del tester, en el desplegable de divisa junto al
@@ -85,4 +101,3 @@ Muestra pequeña y elegida dentro de la propia muestra: pendiente de validar fue
 - `InpCommissionPerLot` = 0 por defecto (cuenta Equiti estándar `.sd`, sin comisión; el coste va en el spread ~1,8 pips). Ponlo en ~7 si usas una cuenta con comisión.
 - Spread: `InpMaxSpreadSLPct` (spread máx. como % del SL, por defecto 20%) y `InpMaxSpreadAbsPts` (tope absoluto, 0 = off).
 - Si cambias de versión, pulsa "Restablecer" en la pestaña Parámetros del tester: MT5 conserva los valores usados la última vez.
-- `OnTester()` devuelve `PF * sqrt(trades) * (1 - DD%)` para la optimización personalizada.

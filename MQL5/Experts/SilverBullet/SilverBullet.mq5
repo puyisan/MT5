@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.07"
+#property version   "1.08"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -91,6 +91,9 @@ input group "=== General ==="
 input ulong           InpMagic             = 20261108;       // Magic number
 input bool            InpDraw              = true;           // Dibujar FVG / barridos
 input bool            InpVerbose           = true;           // Log detallado
+
+input group "=== Optimización ==="
+input int             InpTesterMinTrades   = 10;             // Mín. operaciones para puntuar en OnTester (antes 30)
 
 //+------------------------------------------------------------------+
 //| Utilidades                                                       |
@@ -579,7 +582,7 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.07 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.08 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)
@@ -654,15 +657,23 @@ void OnTick()
 
 //+------------------------------------------------------------------+
 //| Criterio personalizado de optimización                           |
-//| PF * sqrt(trades) * (1 - DD%/100), mínimo 30 operaciones         |
+//| PF(acotado a 10) * sqrt(trades) * (1 - DD%/100)                  |
+//| Devuelve 0 si hay menos de InpTesterMinTrades operaciones.       |
 //+------------------------------------------------------------------+
 double OnTester()
   {
    const double trades=TesterStatistics(STAT_TRADES);
-   if(trades<30) return 0.0;
-   const double pf=TesterStatistics(STAT_PROFIT_FACTOR);
-   const double dd=TesterStatistics(STAT_EQUITY_DDREL_PERCENT);
-   if(pf<=0.0) return 0.0;
-   return pf*MathSqrt(trades)*MathMax(0.0,1.0-dd/100.0);
+   if(trades<InpTesterMinTrades) return 0.0;
+   const double gp =TesterStatistics(STAT_GROSS_PROFIT);
+   const double gl =MathAbs(TesterStatistics(STAT_GROSS_LOSS));
+   const double dd =TesterStatistics(STAT_EQUITY_DDREL_PERCENT);
+   //--- PF acotado: sin pérdidas MT5 reporta PF=0, lo que hundiría a las mejores pasadas
+   double pf=(gl>0.0)?gp/gl:((gp>0.0)?10.0:0.0);
+   pf=MathMin(pf,10.0);
+   const double score=pf*MathSqrt(trades)*MathMax(0.0,1.0-dd/100.0);
+   if(!MQLInfoInteger(MQL_OPTIMIZATION))
+      PrintFormat("OnTester: %d operaciones | PF %.2f | DD equity %.2f%% | neto %.2f | puntuación %.3f",
+                  (int)trades,pf,dd,TesterStatistics(STAT_PROFIT),score);
+   return score;
   }
 //+------------------------------------------------------------------+
