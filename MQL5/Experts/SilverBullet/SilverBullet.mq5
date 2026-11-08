@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.04"
+#property version   "1.05"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -32,7 +32,7 @@ input bool            InpWinAM             = true;           // 10:00-11:00 NY
 input bool            InpWinPM             = false;          // 14:00-15:00 NY
 input int             InpSweepLeadMin      = 30;             // Minutos previos en que un barrido cuenta
 input int             InpMaxBarsSweepToFVG = 20;             // Velas máx. entre barrido y FVG
-input int             InpNoNewOrderLastMin = 10;             // Sin órdenes nuevas en los últimos N min de la ventana
+input int             InpNoNewOrderLastMin = 0;              // Sin órdenes nuevas en los últimos N min de la ventana (0 = off)
 
 input group "=== Fair Value Gap ==="
 input ENUM_TIMEFRAMES InpExecTF            = PERIOD_M1;      // TF de ejecución / FVG
@@ -60,7 +60,7 @@ input int             InpTargetMinPrio     = 3;              // Prioridad mínim
 input int             InpMinSweepPrio      = 2;              // Prioridad mínima del pool barrido (1=swing M5, 3=EQ/sesión, 5=PDH/PDL)
 
 input group "=== Sesgo (bias) ==="
-input ENUM_SB_BIAS    InpBiasMode          = BIAS_EMA;       // Filtro de sesgo
+input ENUM_SB_BIAS    InpBiasMode          = BIAS_OFF;       // Filtro de sesgo (EMA anula los setups de reversión; ver README)
 input ENUM_TIMEFRAMES InpBiasTF            = PERIOD_H1;      // TF del sesgo (modo EMA)
 input int             InpBiasEMA           = 50;             // Periodo EMA del sesgo
 
@@ -567,7 +567,7 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.04 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.05 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)

@@ -38,12 +38,22 @@ Al iniciar, revisa el log:
 4. SL detrás del extremo del barrido; TP en el pool opuesto (draw on liquidity) con R:R mínimo, o un R:R fijo si no hay pool.
 5. La orden limitada caduca al final de la ventana. 1 operación por ventana. Break-even a 1R y cierre por tiempo máximo.
 
-### Filtros de calidad (v1.04)
-- `InpMinSweepPrio` (por defecto 2): solo abren contexto los barridos de pools relevantes
+### Filtros de calidad
+- `InpMinSweepPrio` (por defecto **2**): solo abren contexto los barridos de pools relevantes
   (EQH/EQL y sesiones = 3, Londres = 4, PDH/PDL = 5). Los swings simples de M5 (prioridad 1) se ignoran.
-- `InpBiasMode`: `BIAS_EMA` (cierre H1 vs EMA 50: compras arriba, ventas abajo), `BIAS_PD_RANGE`
-  (compras bajo el 50% del rango del día anterior, ventas encima) u `BIAS_OFF`.
-- `InpNoNewOrderLastMin` (por defecto 10): sin órdenes nuevas en los últimos N minutos de la ventana.
+- `InpBiasMode` (por defecto **BIAS_OFF**): `BIAS_EMA` (cierre H1 vs EMA 50) o `BIAS_PD_RANGE`
+  (premium/discount vs rango del día anterior). La EMA contradice la lógica de reversión: un barrido de BSL
+  llega tras una subida que deja el precio sobre la EMA y bloquea la venta.
+- `InpNoNewOrderLastMin` (por defecto **0** = off): sin órdenes nuevas en los últimos N minutos de la ventana.
+
+### Resultados de referencia (EURUSD.sd Equiti, 01-01-2026 a 07-11-2026, ticks reales, ventana 10-11 NY)
+| Prueba | Configuración | Trades | Neto USD | DD equity |
+|---|---|---|---|---|
+| A | `InpMinSweepPrio=1`, sin sesgo (≈ v1.03) | 16 | +507 | 2,62 % |
+| B | prio 2 + `BIAS_EMA` + últimos 10 min | 1 | +24 | 0,32 % |
+| **C** | **prio 2, sin sesgo (defaults v1.05)** | **6** | **+1091** | **0,81 %** |
+
+Muestra pequeña y elegida dentro de la propia muestra: pendiente de validar fuera de muestra (2025) y en demo.
 
 ### Notas de backtesting
 - Usa "Cada tick basado en ticks reales" para M1.
