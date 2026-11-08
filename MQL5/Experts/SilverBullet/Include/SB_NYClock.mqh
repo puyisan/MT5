@@ -248,11 +248,16 @@ int CNYClock::ValidateHistory(const int maxBars)
    int dom=0;
    for(int h=1;h<24;h++) if(hist[h]>hist[dom]) dom=h;
    int mismatches=opens-hist[dom];
-   if(mismatches>0 || dom<16 || dom>18)
+   //--- Con el modelo equivocado fallan TODAS las semanas de desajuste DST (~4 por año).
+   //--- 1-2 aperturas atípicas sueltas = festivos o huecos de datos del broker.
+   const bool bad=(dom<16 || dom>18 || mismatches>MathMax(2,opens/20));
+   if(bad)
       PrintFormat("CNYClock [AVISO]: %d/%d aperturas semanales no cuadran (hora NY dominante %02d:00). "
                   "Configuración GMT/DST del broker probablemente INCORRECTA.",mismatches,opens,dom);
    else
-      PrintFormat("CNYClock: %d aperturas semanales coherentes a las %02d:00 NY. Modelo DST OK.",opens,dom);
+      PrintFormat("CNYClock: %d/%d aperturas semanales coherentes a las %02d:00 NY (%d atípicas: festivos/huecos). Modelo DST OK.",
+                  opens-mismatches,opens,dom,mismatches);
+   if(!bad) return 0;
    return mismatches;
   }
 

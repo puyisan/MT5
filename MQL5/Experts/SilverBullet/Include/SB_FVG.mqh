@@ -18,6 +18,7 @@ private:
    double            m_minGapATR;
    double            m_dispATR;
    double            m_minBodyRatio;
+   double            m_spreadMult;
    int               m_expiryBars;
 
    bool              Detect(const MqlRates &r[],const double atr,const double spread,SFVG &f);
@@ -26,9 +27,10 @@ private:
 
 public:
                      CFVGDetector(void) : m_tfSec(60),m_minGapPts(0),m_minGapATR(0),
-                                          m_dispATR(0),m_minBodyRatio(0),m_expiryBars(30) {}
+                                          m_dispATR(0),m_minBodyRatio(0),m_spreadMult(0.5),m_expiryBars(30) {}
    void              Init(const ENUM_TIMEFRAMES tf,const double minGapPts,const double minGapATR,
-                          const double dispATR,const double minBodyRatio,const int expiryBars);
+                          const double dispATR,const double minBodyRatio,const int expiryBars,
+                          const double spreadMult);
    bool              OnNewBar(const MqlRates &r[],const double atr,const double spread,SFVG &out);
    void              Reset(void) { ArrayResize(m_fvgs,0); }
    int               Total(void) const { return ArraySize(m_fvgs); }
@@ -36,8 +38,10 @@ public:
 
 //+------------------------------------------------------------------+
 void CFVGDetector::Init(const ENUM_TIMEFRAMES tf,const double minGapPts,const double minGapATR,
-                        const double dispATR,const double minBodyRatio,const int expiryBars)
+                        const double dispATR,const double minBodyRatio,const int expiryBars,
+                        const double spreadMult)
   {
+   m_spreadMult  =MathMax(0.0,spreadMult);
    m_tfSec       =PeriodSeconds(tf);
    m_minGapPts   =minGapPts;
    m_minGapATR   =minGapATR;
@@ -52,7 +56,7 @@ void CFVGDetector::Init(const ENUM_TIMEFRAMES tf,const double minGapPts,const do
 //+------------------------------------------------------------------+
 bool CFVGDetector::Detect(const MqlRates &r[],const double atr,const double spread,SFVG &f)
   {
-   const double minGap=MathMax(MathMax(m_minGapPts*_Point,m_minGapATR*atr),2.0*spread);
+   const double minGap=MathMax(MathMax(m_minGapPts*_Point,m_minGapATR*atr),m_spreadMult*spread);
 
    const double body2 =MathAbs(r[1].close-r[1].open);
    const double range2=r[1].high-r[1].low;

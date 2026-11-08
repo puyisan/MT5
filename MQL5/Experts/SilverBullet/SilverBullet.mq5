@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.01"
+#property version   "1.02"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -38,6 +38,7 @@ input ENUM_TIMEFRAMES InpExecTF            = PERIOD_M1;      // TF de ejecución
 input int             InpATRPeriod         = 14;             // Periodo ATR
 input double          InpMinGapPts         = 5;              // Tamaño mínimo del gap (puntos)
 input double          InpMinGapATR         = 0.20;           // Tamaño mínimo del gap (x ATR)
+input double          InpMinGapSpread      = 0.5;            // Tamaño mínimo del gap (x spread)
 input double          InpDispATR           = 1.00;           // Cuerpo mínimo de C2 (x ATR)
 input double          InpMinBodyRatio      = 0.55;           // Cuerpo/rango mínimo de C2
 input int             InpFVGExpiryBars     = 30;             // Caducidad del FVG (velas)
@@ -61,7 +62,7 @@ input double          InpRiskPct           = 0.5;            // Riesgo por opera
 input bool            InpRiskOnEquity      = false;          // Calcular sobre equity
 input double          InpMaxDailyLossPct   = 2.0;            // Pérdida diaria máx. (%), 0 = off
 input double          InpCommissionPerLot  = 7.0;            // Comisión ida+vuelta por lote (divisa cuenta)
-input int             InpMaxSpreadPts      = 15;             // Spread máximo (puntos)
+input int             InpMaxSpreadPts      = 25;             // Spread máximo (puntos)
 input int             InpSlippagePts       = 5;              // Slippage máximo (puntos)
 input double          InpSLBufferPts       = 10;             // Margen del SL más allá del barrido (puntos)
 input double          InpMinSLPts          = 30;             // SL mínimo (puntos)
@@ -412,7 +413,10 @@ void OnNewExecBar(void)
          else
            {
             if(hasSweep) g_fn.sweepsIgnored++;
-            if(++g_sweepBars>InpMaxBarsSweepToFVG)
+            //--- el plazo para el FVG solo corre DENTRO de la ventana: un barrido en el margen
+            //--- previo (p.ej. 09:35 NY) no caduca antes de que la ventana abra
+            if(g_clock.InWindow(w,barTime)) g_sweepBars++;
+            if(g_sweepBars>InpMaxBarsSweepToFVG)
               {
                g_fn.sweepsExpired++;
                Log("Barrido caducado sin FVG válido");
@@ -472,7 +476,7 @@ int OnInit()
      { PrintFormat("No se pudo crear iATR (err=%d)",GetLastError()); return INIT_FAILED; }
 
    //--- módulos
-   g_fvg.Init(InpExecTF,InpMinGapPts,InpMinGapATR,InpDispATR,InpMinBodyRatio,InpFVGExpiryBars);
+   g_fvg.Init(InpExecTF,InpMinGapPts,InpMinGapATR,InpDispATR,InpMinBodyRatio,InpFVGExpiryBars,InpMinGapSpread);
    g_liq.Init(InpSwingTF,InpSwingN,InpReclaimBars,InpMinPenPts,InpMaxPenATR,InpEqTolATR,InpUseSwingPools);
    g_risk.Init(_Symbol,InpMagic,InpRiskPct,InpRiskOnEquity,InpMaxDailyLossPct,InpCommissionPerLot,InpMaxSpreadPts);
    if(!g_exec.Init(_Symbol,InpMagic,InpSlippagePts)) return INIT_FAILED;
