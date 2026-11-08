@@ -23,6 +23,9 @@ Include/SB_Executor.mqh     CTrade: órdenes, stops/freeze level, slippage, BE, 
 
 ### Reloj del broker (crítico)
 Por defecto: `InpBrokerGMTWinter = 2`, `InpBrokerDST = DST EE.UU.` (GMT+2/+3, cierre de NY = 00:00 servidor).
+
+**Verificado para Equiti (nov. 2026):** servidor en GMT+2 en invierno y apertura semanal del 26-oct-2026
+(semana de desajuste EE.UU./Europa) a las 00:00 → sigue el DST de EE.UU. Los valores por defecto son correctos.
 Al iniciar, revisa el log:
 - `CNYClock: N aperturas semanales coherentes a las 17:00 NY. Modelo DST OK.` → configuración correcta.
 - `[AVISO] ... aperturas semanales no cuadran` → cambia `InpBrokerDST` a `DST Europa` (o el offset) y repite.
