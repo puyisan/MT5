@@ -40,5 +40,7 @@ Al iniciar, revisa el log:
 
 ### Notas de backtesting
 - Usa "Cada tick basado en ticks reales" para M1.
-- Ajusta `InpCommissionPerLot` al tipo de cuenta Equiti (0 si la cuenta no cobra comisión) e `InpMaxSpreadPts`.
+- Ajusta `InpCommissionPerLot` al tipo de cuenta Equiti (0 si la cuenta no cobra comisión).
+- Spread: `InpMaxSpreadSLPct` (spread máx. como % del SL, por defecto 20%) y `InpMaxSpreadAbsPts` (tope absoluto, 0 = off).
+- Si cambias de versión, pulsa "Restablecer" en la pestaña Parámetros del tester: MT5 conserva los valores usados la última vez.
 - `OnTester()` devuelve `PF * sqrt(trades) * (1 - DD%)` para la optimización personalizada.

@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.02"
+#property version   "1.03"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -62,7 +62,8 @@ input double          InpRiskPct           = 0.5;            // Riesgo por opera
 input bool            InpRiskOnEquity      = false;          // Calcular sobre equity
 input double          InpMaxDailyLossPct   = 2.0;            // Pérdida diaria máx. (%), 0 = off
 input double          InpCommissionPerLot  = 7.0;            // Comisión ida+vuelta por lote (divisa cuenta)
-input int             InpMaxSpreadPts      = 25;             // Spread máximo (puntos)
+input double          InpMaxSpreadSLPct    = 20.0;           // Spread máximo (% de la distancia del SL), 0 = off
+input int             InpMaxSpreadAbsPts   = 0;              // Tope absoluto de spread (puntos), 0 = off
 input int             InpSlippagePts       = 5;              // Slippage máximo (puntos)
 input double          InpSLBufferPts       = 10;             // Margen del SL más allá del barrido (puntos)
 input double          InpMinSLPts          = 30;             // SL mínimo (puntos)
@@ -131,7 +132,10 @@ struct SFunnel
    int               days, windows, sweeps, sweepsReplaced, sweepsIgnored, sweepsExpired;
    int               fvgWin, fvgDirMismatch, fvgBeforeSweep, fvgOutOfWindow, fvgNoMSS, fvgCandidates;
    int               rejExposure, rejSpread, rejSLMin, rejSLMax, rejRR, rejKind, rejDaily, rejLots, rejMargin, rejSend;
+   int               rejSpreadAbs, rejSpreadPct;
    int               placed, filled, expired;
+   int               spreadN, spreadMin, spreadMax;
+   double            spreadSum;
   };
 SFunnel       g_fn;
 
@@ -272,8 +276,13 @@ void TryEnter(const int w,const SFVG &f)
      { g_fn.rejExposure++; Log("Entrada descartada: ya hay exposición del EA"); return; }
 
    int spreadPts=0;
-   if(!g_risk.SpreadOK(spreadPts))
-     { g_fn.rejSpread++; Log(StringFormat("Entrada descartada: spread %d > %d",spreadPts,InpMaxSpreadPts)); return; }
+   const bool absOk=g_risk.SpreadOK(spreadPts);
+   g_fn.spreadN++; g_fn.spreadSum+=spreadPts;
+   if(g_fn.spreadN==1 || spreadPts<g_fn.spreadMin) g_fn.spreadMin=spreadPts;
+   if(spreadPts>g_fn.spreadMax) g_fn.spreadMax=spreadPts;
+   if(!absOk)
+     { g_fn.rejSpread++; g_fn.rejSpreadAbs++;
+       Log(StringFormat("Entrada descartada: spread %d > tope absoluto %d pts",spreadPts,InpMaxSpreadAbsPts)); return; }
    const double spread=spreadPts*_Point;
    const int    dir   =f.dir;
 
@@ -288,6 +297,13 @@ void TryEnter(const int w,const SFVG &f)
    if(risk/_Point<InpMinSLPts || risk/_Point>InpMaxSLPts)
      { if(risk/_Point<InpMinSLPts) g_fn.rejSLMin++; else g_fn.rejSLMax++;
        Log(StringFormat("Entrada descartada: SL %.0f pts fuera de [%.0f, %.0f]",risk/_Point,InpMinSLPts,InpMaxSLPts)); return; }
+
+   //--- spread relativo al stop: lo que realmente importa es su peso sobre el riesgo
+   const double spreadPct=100.0*spread/risk;
+   if(InpMaxSpreadSLPct>0.0 && spreadPct>InpMaxSpreadSLPct)
+     { g_fn.rejSpread++; g_fn.rejSpreadPct++;
+       Log(StringFormat("Entrada descartada: spread %d pts = %.1f%% del SL (%.0f pts) > %.1f%%",
+                        spreadPts,spreadPct,risk/_Point,InpMaxSpreadSLPct)); return; }
 
    //--- TP: draw on liquidity (pool opuesto) o RR fijo
    double target=0.0, tp=0.0;
@@ -478,7 +494,7 @@ int OnInit()
    //--- módulos
    g_fvg.Init(InpExecTF,InpMinGapPts,InpMinGapATR,InpDispATR,InpMinBodyRatio,InpFVGExpiryBars,InpMinGapSpread);
    g_liq.Init(InpSwingTF,InpSwingN,InpReclaimBars,InpMinPenPts,InpMaxPenATR,InpEqTolATR,InpUseSwingPools);
-   g_risk.Init(_Symbol,InpMagic,InpRiskPct,InpRiskOnEquity,InpMaxDailyLossPct,InpCommissionPerLot,InpMaxSpreadPts);
+   g_risk.Init(_Symbol,InpMagic,InpRiskPct,InpRiskOnEquity,InpMaxDailyLossPct,InpCommissionPerLot,InpMaxSpreadAbsPts);
    if(!g_exec.Init(_Symbol,InpMagic,InpSlippagePts)) return INIT_FAILED;
 
    ArraySetAsSeries(g_rates,true);
@@ -513,8 +529,11 @@ void PrintFunnel(void)
    PrintFormat("  con contexto SWEPT, descartados: dirección %d | previos al barrido %d | fuera de ventana %d | sin MSS %d",
                g_fn.fvgDirMismatch,g_fn.fvgBeforeSweep,g_fn.fvgOutOfWindow,g_fn.fvgNoMSS);
    PrintFormat("FVG candidatos a entrada ...... %d",g_fn.fvgCandidates);
-   PrintFormat("  rechazos: exposición %d | spread %d | SL<min %d | SL>max %d | R:R %d | tipo orden %d",
-               g_fn.rejExposure,g_fn.rejSpread,g_fn.rejSLMin,g_fn.rejSLMax,g_fn.rejRR,g_fn.rejKind);
+   PrintFormat("  spread en candidatos (pts): min %d | medio %.1f | max %d",
+               g_fn.spreadMin,(g_fn.spreadN>0)?g_fn.spreadSum/g_fn.spreadN:0.0,g_fn.spreadMax);
+   PrintFormat("  rechazos: exposición %d | spread %d (tope abs %d, %% del SL %d) | SL<min %d | SL>max %d | R:R %d | tipo orden %d",
+               g_fn.rejExposure,g_fn.rejSpread,g_fn.rejSpreadAbs,g_fn.rejSpreadPct,
+               g_fn.rejSLMin,g_fn.rejSLMax,g_fn.rejRR,g_fn.rejKind);
    PrintFormat("            pérdida diaria %d | lote<mínimo %d | margen %d | envío fallido %d",
                g_fn.rejDaily,g_fn.rejLots,g_fn.rejMargin,g_fn.rejSend);
    PrintFormat("Órdenes enviadas .............. %d  (ejecutadas %d, expiradas/canceladas %d)",
