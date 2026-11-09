@@ -51,6 +51,15 @@ input double StopLossPips      = 50.0; // Stop Loss en puntos del indice
 input double TP1Pips           = 100.0;// Take Profit entrada 1 (puntos del indice)
 input double TP2Pips           = 200.0;// Take Profit entrada 2 (puntos del indice)
 
+input group "=== ENTRADA Y SPREAD ==="
+input double OffsetEntradaPips  = 1.0;  // Distancia de la entrada al rango (pips). v2.65 = 1
+input bool   CompensarSpreadBuy = true; // [true] BuyStop = alto + offset + spread actual
+                                        // La BuyStop se ejecuta con el ASK: sin compensar,
+                                        // salta antes de que el BID rompa el rango.
+                                        // [false] = comportamiento de v2.65
+input double MaxSpreadPips      = 0.0;  // Spread maximo para lanzar una bala (pips)
+                                        // 0 = sin filtro
+
 input group "=== CHECKPOINTS (por bala) ==="
 input double CP1Pips           = 50.0; // CP1: Break Even (puntos del indice)
 input double CP3Pips           = 150.0;// CP3: SP entrada 2 a +100 puntos
@@ -1055,8 +1064,8 @@ int OnInit()
       int nowAdj = (canc > 1440 && nowM < nyO) ? nowM + 1440 : nowM;
       if(nowAdj >= nyO && nowAdj < canc)
       {
-         double entryBuy  = NormalizeDouble(rangeHigh + pipSize, symDigits);
-         double entrySell = NormalizeDouble(rangeLow  - pipSize, symDigits);
+         double entryBuy  = PrecioEntradaBuy();
+         double entrySell = PrecioEntradaSell();
          double slDist    = StopLossPips * pipSize;
          double tp1Dist   = TP1Pips     * pipSize;
          double tp2Dist   = TP2Pips     * pipSize;
@@ -1265,8 +1274,8 @@ void OnTick()
       // Dibujar niveles al inicio de NY — una sola vez por dia
       if(!nivelesNYDibujados && NivelesVisible)
       {
-         double entryBuy  = NormalizeDouble(rangeHigh + pipSize, symDigits);
-         double entrySell = NormalizeDouble(rangeLow  - pipSize, symDigits);
+         double entryBuy  = PrecioEntradaBuy();
+         double entrySell = PrecioEntradaSell();
          double slDist    = StopLossPips * pipSize;
          double tp1Dist   = TP1Pips     * pipSize;
          double tp2Dist   = TP2Pips     * pipSize;
@@ -1548,6 +1557,32 @@ void TryLanzarBala()
 }
 
 //+------------------------------------------------------------------+
+//| PRECIOS DE ENTRADA (v2.66)                                       |
+//+------------------------------------------------------------------+
+// Normalizar un precio al tick size del simbolo (no solo a los digitos)
+double NormalizarPrecio(double precio)
+{
+   double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(ts > 0) precio = MathRound(precio / ts) * ts;
+   return NormalizeDouble(precio, symDigits);
+}
+
+// BuyStop: alto del rango + offset (+ spread actual si CompensarSpreadBuy)
+double PrecioEntradaBuy()
+{
+   double offset = OffsetEntradaPips * pipSize;
+   if(CompensarSpreadBuy)
+      offset += MathMax(0, SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID));
+   return NormalizarPrecio(rangeHigh + offset);
+}
+
+// SellStop: bajo del rango - offset (se ejecuta con el Bid: no necesita compensar spread)
+double PrecioEntradaSell()
+{
+   return NormalizarPrecio(rangeLow - OffsetEntradaPips * pipSize);
+}
+
+//+------------------------------------------------------------------+
 //| LANZAR UNA BALA                                                  |
 //+------------------------------------------------------------------+
 void LanzarBala(int idx)
@@ -1590,7 +1625,9 @@ void LanzarBala(int idx)
    }
 
    // Validar spread — si es mayor que el SL la orden sera rechazada
-   double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask    = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid    = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double spread = ask - bid;
    if(spread >= slDist)
    {
       Print("AVISO: Spread (", DoubleToString(spread/pipSize,1), " pips) >= SL (",
@@ -1598,18 +1635,49 @@ void LanzarBala(int idx)
       return;
    }
 
-   double entryBuy  = NormalizeDouble(rangeHigh + pipSize, symDigits);
-   double entrySell = NormalizeDouble(rangeLow  - pipSize, symDigits);
+   // v2.66: filtro de spread maximo (opcional)
+   if(MaxSpreadPips > 0 && spread > MaxSpreadPips * pipSize)
+   {
+      static datetime ultimoAvisoSpread = 0;
+      if(TimeCurrent() - ultimoAvisoSpread > 60)
+      {
+         Print("Spread ", DoubleToString(spread/pipSize,1), " pips > maximo ",
+               DoubleToString(MaxSpreadPips,1), " pips. Bala ", idx+1, " en espera.");
+         ultimoAvisoSpread = TimeCurrent();
+      }
+      return;
+   }
+
+   double entryBuy  = PrecioEntradaBuy();
+   double entrySell = PrecioEntradaSell();
+
+   // v2.66: las stops deben quedar por encima del Ask / por debajo del Bid y a la
+   // distancia minima del broker. Si no, el broker las rechaza y la bala se abortaba
+   // (con alerta Telegram) en cada intento: ahora simplemente se espera.
+   long   freezeLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDistPend = MathMax(_Point, MathMax(stopsLevel, freezeLevel) * _Point);
+   if(entryBuy - ask < minDistPend || bid - entrySell < minDistPend)
+   {
+      static datetime ultimoAvisoDist = 0;
+      if(TimeCurrent() - ultimoAvisoDist > 60)
+      {
+         Print("Precio demasiado cerca de la entrada (Ask ", DoubleToString(ask, symDigits),
+               " / BuyStop ", DoubleToString(entryBuy, symDigits), " | Bid ", DoubleToString(bid, symDigits),
+               " / SellStop ", DoubleToString(entrySell, symDigits), "). Bala ", idx+1, " en espera.");
+         ultimoAvisoDist = TimeCurrent();
+      }
+      return;
+   }
 
    // --- Niveles BUY ---
-   double slBuy   = NormalizeDouble(entryBuy - slDist,  symDigits);
-   double tp1Buy  = NormalizeDouble(entryBuy + tp1Dist, symDigits);
-   double tp2Buy  = NormalizeDouble(entryBuy + tp2Dist, symDigits);
+   double slBuy   = NormalizarPrecio(entryBuy - slDist);
+   double tp1Buy  = NormalizarPrecio(entryBuy + tp1Dist);
+   double tp2Buy  = NormalizarPrecio(entryBuy + tp2Dist);
 
    // --- Niveles SELL ---
-   double slSell  = NormalizeDouble(entrySell + slDist,  symDigits);
-   double tp1Sell = NormalizeDouble(entrySell - tp1Dist, symDigits);
-   double tp2Sell = NormalizeDouble(entrySell - tp2Dist, symDigits);
+   double slSell  = NormalizarPrecio(entrySell + slDist);
+   double tp1Sell = NormalizarPrecio(entrySell - tp1Dist);
+   double tp2Sell = NormalizarPrecio(entrySell - tp2Dist);
 
    string tag = TradeComment + "_B" + IntegerToString(idx+1);
 
@@ -4354,6 +4422,11 @@ void OnChartEvent(const int id, const long& lparam,
 //    - PnL diario y presupuesto de riesgo solo con deals de este EA (antes el
 //      balance de la cuenta: otros EAs, depositos y retiros). Comision de
 //      entrada y DEAL_FEE incluidos. Nuevo input ReservaDeslizamientoPct
+//    - Entrada: inputs OffsetEntradaPips, CompensarSpreadBuy (la BuyStop suma el
+//      spread para que salte cuando el BID rompe) y MaxSpreadPips. Antes de
+//      colocar las stops se comprueba la distancia a Ask/Bid (stops/freeze
+//      level): si no cabe se espera en vez de abortar la bala. Precios
+//      normalizados al tick size
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
