@@ -1,0 +1,33 @@
+;IntradayMomentum v0.10 - backtest de referencia en US500Roll (reglas del articulo, sin optimizar)
+;Cambios sobre los valores por defecto: InpRiskPct=1, InpMaxDDStopPct=0 (freno desactivado solo en backtest)
+;Diseno: 2022.01.01-2024.12.31 | Validacion (una sola vez): 2025.01.01-2026.11.07 | 1 minuto OHLC | 20000 USD
+InpBrokerGMTWinter=2
+InpBrokerDST=1
+InpLookbackDays=14
+InpBandMult=1.0
+InpGapAdjust=true
+InpUseVWAP=true
+InpFirstCheckMinNY=600
+InpLastCheckMinNY=930
+InpCheckEveryMin=30
+InpCloseMinNY=955
+InpAllowLong=true
+InpAllowShort=true
+InpRiskPct=1
+InpRiskOnEquity=false
+InpMaxLeverage=4.0
+InpHardStopMult=1.0
+InpMaxDailyLossPct=2.0
+InpCommissionPerLot=0.0
+InpMaxSpreadPts=150
+InpSlippagePts=50
+InpMaxDDStopPct=0
+InpKillReset=false
+InpPush=false
+InpStatusFile=IntradayMomentum_estado.csv
+InpStatusEveryMin=5
+InpMagic=20261201
+InpVerbose=true
+InpJournal=true
+InpJournalFile=IntradayMomentum_operaciones.csv
+InpTesterMinTrades=30

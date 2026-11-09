@@ -66,6 +66,7 @@ public:
    bool              HasPending(void);
    bool              CancelPendings(void);
    int               CloseAll(const string reason);
+   bool              ModifySL(const double newSl);
    string            CloseReason(const ulong posTicket) const
      { for(int i=0;i<8;i++) if(m_whyTk[i]==posTicket) return m_whyTxt[i]; return ""; }
    int               ErrorCount(void) const { return m_errCount; }
@@ -213,6 +214,29 @@ int CExecutor::CloseAll(const string reason)
       closed++;
      }
    return closed;
+  }
+
+//+------------------------------------------------------------------+
+//| Mueve el SL de las posiciones propias (respeta stops/freeze)     |
+//+------------------------------------------------------------------+
+bool CExecutor::ModifySL(const double newSl)
+  {
+   bool ok=true;
+   m_sym.RefreshRates();
+   const double md=MinDist();
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      if(!m_pos.SelectByIndex(i) || !Mine(m_pos.Symbol(),m_pos.Magic())) continue;
+      const double sl=NormPrice(newSl);
+      if(MathAbs(sl-m_pos.StopLoss())<m_sym.Point()/2) continue;
+      const bool isBuy=(m_pos.PositionType()==POSITION_TYPE_BUY);
+      if(isBuy && m_sym.Bid()-sl<md) continue;
+      if(!isBuy && sl-m_sym.Ask()<md) continue;
+      ResetLastError();
+      if(!m_trade.PositionModify(m_pos.Ticket(),sl,m_pos.TakeProfit()))
+        { LogFail(StringFormat("PositionModify #%I64u",m_pos.Ticket())); ok=false; }
+     }
+   return ok;
   }
 
 bool CExecutor::CancelPendings(void)

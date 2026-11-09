@@ -200,7 +200,7 @@ string CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason,const d
    //--- contexto desde el comentario "SB 10-11NY EQH"
    string parts[];
    string win="",lvl="";
-   if(StringSplit(cmtIn,' ',parts)>=3 && parts[0]=="SB") { win=WindowName(parts[1]); lvl=parts[2]; }
+   if(StringSplit(cmtIn,' ',parts)>=3 && (parts[0]=="SB" || parts[0]=="IM")) { win=WindowName(parts[1]); lvl=parts[2]; }
 
    const string line=StringFormat("%I64u,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
                                   posId,Ts(tIn),Ts(tOut),(dir>0)?"compra":"venta",win,lvl,

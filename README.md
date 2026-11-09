@@ -1,5 +1,20 @@
 # MT5 – Expert Advisors
 
+## Intraday Momentum EA (en investigación) – `MQL5/Experts/IntradayMomentum/`
+
+Momentum intradía "Noise Area" sobre el S&P 500 (US500Roll de Equiti), según Zarattini, Aziz & Barbon (2024),
+*Beat the Market: An Effective Intraday Momentum Strategy for S&P500 ETF (SPY)*, SFI RP 24-97.
+Reutiliza los módulos del Silver Bullet (`..\SilverBullet\Include`): reloj NY con DST, riesgo, ejecución,
+registro CSV, freno y avisos. **Copia las dos carpetas** (`IntradayMomentum` y `SilverBullet`) a `MQL5/Experts/`.
+
+- Controles cada 30 min de 10:00 a 15:30 NY; largo si el precio supera max(banda superior, VWAP), corto si cae
+  bajo min(banda inferior, VWAP); salida cuando cruza ese stop dinámico; cierre obligatorio 15:55 NY.
+- SL de catástrofe en el servidor y lote por % de riesgo hasta ese SL, con tope de apalancamiento 4x.
+- Preset de backtest: `MQL5/Profiles/Tester/IntradayMomentum_v010_backtest.set`.
+- Protocolo: diseño 2022-2024, validación una sola vez 2025-2026, sin optimizar las reglas del artículo.
+
+> El Silver Bullet (abajo) quedó **aparcado**: sin ventaja demostrable fuera de muestra con el spread de la cuenta.
+
 ## Silver Bullet EA (ICT) – `MQL5/Experts/SilverBullet/`
 
 EA para la estrategia **ICT Silver Bullet**: barrido de liquidez (BSL/SSL) → FVG de 3 velas en dirección
