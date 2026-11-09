@@ -23,8 +23,8 @@
 //|  SL, con tope de apalancamiento.                                 |
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.01"
-#define IM_VERSION "1.01"
+#property version   "1.02"
+#define IM_VERSION "1.02"
 #property description "Intraday momentum (Noise Area) en el S&P 500 CFD, sesión regular de NY"
 
 #include "..\SilverBullet\Include\SB_Defines.mqh"
@@ -52,6 +52,8 @@ input int             InpFirstCheckMinNY   = 600;            // Primer control (
 input int             InpLastCheckMinNY    = 930;            // Último control = 15:30
 input int             InpCheckEveryMin     = 30;             // Frecuencia de controles (min)
 input int             InpCloseMinNY        = 955;            // Cierre obligatorio = 15:55 NY
+input bool            InpSkipUSHolidays    = true;           // No operar en festivos del NYSE
+input int             InpEarlyCloseMinNY   = 775;            // Días de cierre anticipado (3-jul, viernes de Acción de Gracias, 24-dic): cierre 12:55 NY
 input bool            InpAllowLong         = true;           // Permitir largos
 input bool            InpAllowShort        = true;           // Permitir cortos
 
@@ -59,7 +61,7 @@ input group "=== Riesgo ==="
 input double          InpRiskPct           = 0.5;            // Riesgo por operación hasta el SL de catástrofe (% balance)
 input bool            InpRiskOnEquity      = false;          // Calcular sobre equity
 input double          InpMaxLeverage       = 4.0;            // Apalancamiento nocional máximo (x equity)
-input double          InpHardStopMult      = 1.0;            // SL de catástrofe: stop dinámico +/- N x ancho de la zona
+input double          InpHardStopMult      = 3.0;            // SL de catástrofe: stop dinámico +/- N x ancho de la zona
 input double          InpMaxDailyLossPct   = 2.0;            // Pérdida diaria máx. (%), 0 = off
 input double          InpCommissionPerLot  = 0.0;            // Comisión ida+vuelta por lote (divisa cuenta)
 input int             InpMaxSpreadPts      = 150;            // Spread máximo (puntos; 150 = 1,5 del índice)
@@ -105,7 +107,7 @@ string        g_lastAction="";
 
 struct SImFunnel
   {
-   int days, daysNoData, checkpoints, sigLong, sigShort, entries, exitStop, exitEOD;
+   int days, daysNoData, daysHoliday, daysEarly, checkpoints, sigLong, sigShort, entries, exitStop, exitEOD;
    int rejSpread, rejLots, rejDaily, rejKill, rejMargin, rejSend, rejDir;
   };
 SImFunnel g_fn;
@@ -139,6 +141,53 @@ bool OpenAt(const datetime nyDay,const int minNY,double &px)
 int CpMinute(const int k) { return InpFirstCheckMinNY+k*InpCheckEveryMin; }
 
 //+------------------------------------------------------------------+
+//| Calendario del NYSE por reglas (sin listas que caduquen)         |
+//+------------------------------------------------------------------+
+datetime MkDate(const int y,const int m,const int d) { MqlDateTime s; ZeroMemory(s); s.year=y; s.mon=m; s.day=d; return StructToTime(s); }
+int      DowOf(const datetime t) { MqlDateTime s; TimeToStruct(t,s); return s.day_of_week; }
+datetime NthWeekday(const int y,const int m,const int wd,const int n)
+  { const datetime f=MkDate(y,m,1); const int add=(wd-DowOf(f)+7)%7; return f+(datetime)((add+7*(n-1))*86400); }
+datetime LastWeekday(const int y,const int m,const int wd)
+  {
+   const datetime last=((m==12)?MkDate(y+1,1,1):MkDate(y,m+1,1))-86400;
+   return last-(datetime)(((DowOf(last)-wd+7)%7)*86400);
+  }
+datetime Observed(const datetime d) { const int w=DowOf(d); return (w==6)?d-86400:((w==0)?d+86400:d); }
+datetime EasterSunday(const int y)
+  {
+   const int a=y%19,b=y/100,c=y%100,d=b/4,e=b%4,f=(b+8)/25,g=(b-f+1)/3,h=(19*a+b-d-g+15)%30;
+   const int i=c/4,k=c%4,l=(32+2*e+2*i-h-k)%7,m=(a+11*h+22*l)/451;
+   return MkDate(y,(h+l-7*m+114)/31,((h+l-7*m+114)%31)+1);
+  }
+bool IsUSHoliday(const datetime nyDay)
+  {
+   MqlDateTime s; TimeToStruct(nyDay,s); const int y=s.year;
+   const datetime ny1=MkDate(y,1,1);
+   if(nyDay==ny1 && DowOf(ny1)!=6) return true;                         // Año Nuevo (sábado: no se traslada)
+   if(DowOf(ny1)==0 && nyDay==ny1+86400) return true;                   // Año Nuevo en domingo -> lunes
+   if(nyDay==NthWeekday(y,1,1,3)) return true;                          // Martin Luther King
+   if(nyDay==NthWeekday(y,2,1,3)) return true;                          // Presidentes
+   if(nyDay==EasterSunday(y)-2*86400) return true;                      // Viernes Santo
+   if(nyDay==LastWeekday(y,5,1)) return true;                           // Memorial Day
+   if(y>=2022 && nyDay==Observed(MkDate(y,6,19))) return true;          // Juneteenth
+   if(nyDay==Observed(MkDate(y,7,4))) return true;                      // Independencia
+   if(nyDay==NthWeekday(y,9,1,1)) return true;                          // Labor Day
+   if(nyDay==NthWeekday(y,11,4,4)) return true;                         // Acción de Gracias
+   if(nyDay==Observed(MkDate(y,12,25))) return true;                    // Navidad
+   return false;
+  }
+bool IsEarlyClose(const datetime nyDay)
+  {
+   MqlDateTime s; TimeToStruct(nyDay,s); const int y=s.year;
+   if(IsUSHoliday(nyDay) || s.day_of_week==0 || s.day_of_week==6) return false;
+   if(s.mon==7 && s.day==3) return true;                                 // víspera de la Independencia
+   if(nyDay==NthWeekday(y,11,4,4)+86400) return true;                    // viernes de Acción de Gracias
+   if(s.mon==12 && s.day==24) return true;                               // Nochebuena
+   return false;
+  }
+datetime g_calDay=0; bool g_isHol=false, g_isEarly=false;
+
+//+------------------------------------------------------------------+
 //| Preparación diaria: apertura, cierre previo y sigma por control  |
 //| (una vez al día; ~14 x 13 búsquedas de barra)                    |
 //+------------------------------------------------------------------+
@@ -153,6 +202,7 @@ bool PrepareSession(const datetime nyDay)
    for(int back=1;back<=45 && found<InpLookbackDays;back++)
      {
       const datetime d=nyDay-(datetime)(back*86400);
+      if(InpSkipUSHolidays && (IsUSHoliday(d) || IsEarlyClose(d))) continue;   // no cuentan para la zona de ruido
       double o=0;
       if(!OpenAt(d,570,o)) continue;                             // sin sesión (fin de semana / festivo)
       double c[IM_MAX_CP]; bool ok=true;
@@ -364,7 +414,8 @@ void OnDeinit(const int reason)
    if(!MQLInfoInteger(MQL_OPTIMIZATION))
      {
       Print("================ INTRADAY MOMENTUM - EMBUDO ================");
-      PrintFormat("Sesiones preparadas ........... %d  (sin datos suficientes %d)",g_fn.days,g_fn.daysNoData);
+      PrintFormat("Sesiones preparadas ........... %d  (sin datos suficientes %d, festivos %d, cierre anticipado %d)",
+                  g_fn.days,g_fn.daysNoData,g_fn.daysHoliday,g_fn.daysEarly);
       PrintFormat("Controles evaluados ........... %d",g_fn.checkpoints);
       PrintFormat("Señales ....................... largas %d | cortas %d",g_fn.sigLong,g_fn.sigShort);
       PrintFormat("Rechazos ...................... spread %d | lote<mín %d | pérdida diaria %d | freno %d | margen %d | envío %d | dirección %d",
@@ -389,8 +440,19 @@ void OnTick()
    MqlDateTime t; TimeToStruct(g_clock.ServerToNY(m1),t);
    const int minNY=t.hour*60+t.min;                         // minuto NY en que empieza la barra nueva
 
+   //--- calendario del día (una vez al día)
+   if(g_calDay!=nyDay)
+     {
+      g_calDay=nyDay;
+      g_isHol=InpSkipUSHolidays && IsUSHoliday(nyDay);
+      g_isEarly=IsEarlyClose(nyDay);
+      if(g_isHol)   { g_fn.daysHoliday++; Log(StringFormat("%s: festivo del NYSE, no se opera",TimeToString(nyDay,TIME_DATE))); }
+      if(g_isEarly) { g_fn.daysEarly++;   Log(StringFormat("%s: cierre anticipado a las %02d:%02d NY",TimeToString(nyDay,TIME_DATE),InpEarlyCloseMinNY/60,InpEarlyCloseMinNY%60)); }
+     }
+   const int closeMin=g_isEarly?InpEarlyCloseMinNY:InpCloseMinNY;
+
    //--- cierre obligatorio de la sesión (y red de seguridad si algo quedó abierto)
-   if(minNY>=InpCloseMinNY || minNY<570)
+   if(minNY>=closeMin || minNY<570 || g_isHol)
      {
       if(PositionDir()!=0)
         {
@@ -411,7 +473,7 @@ void OnTick()
    if(!g_sessOk || g_sessDay!=nyDay) return;
 
    //--- ¿la barra nueva empieza justo en un control?
-   if(minNY<InpFirstCheckMinNY || minNY>InpLastCheckMinNY) return;
+   if(minNY<InpFirstCheckMinNY || minNY>InpLastCheckMinNY || minNY>=closeMin) return;
    if((minNY-InpFirstCheckMinNY)%InpCheckEveryMin!=0) return;
    const int k=(minNY-InpFirstCheckMinNY)/InpCheckEveryMin;
    if(k<0 || k>=g_nCp) return;
