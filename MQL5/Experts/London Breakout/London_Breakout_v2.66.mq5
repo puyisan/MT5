@@ -1100,15 +1100,18 @@ void OnDeinit(const int reason)
    // REASON_CHARTCHANGE  = 3  → cambio de temporalidad
    // REASON_PARAMETERS   = 5  → cambio de parametros
    // REASON_RECOMPILE    = 4  → recompilacion
-   // REASON_CHARTCLOSE   = 6  → grafico cerrado (MT5 lo reabre)
    // REASON_TEMPLATE     = 7  → cambio de template
-   // REASON_INITFAILED   = 8  → fallo en OnInit (no habia ordenes aun)
-   // REASON_CLOSE        = 9  → cierre de MT5 (podria mantenerse)
+   // v2.66 — tampoco cancelan ordenes (el estado se recupera del historial al volver):
+   // REASON_CHARTCLOSE   = 6  → grafico cerrado
+   // REASON_CLOSE        = 9  → cierre de MT5 / reinicio del VPS
+   // Las ordenes pendientes son ORDER_TIME_DAY y caducan solas al final del dia.
 
    bool esCambioTemporal = (reason == REASON_CHARTCHANGE ||
                             reason == REASON_PARAMETERS  ||
                             reason == REASON_RECOMPILE   ||
                             reason == REASON_TEMPLATE);
+   bool esCierreTerminal = (reason == REASON_CLOSE ||
+                            reason == REASON_CHARTCLOSE);
 
    EventKillTimer();
 
@@ -1122,6 +1125,17 @@ void OnDeinit(const int reason)
    {
       reinicioTemporal = true;
       Print("London_Breakout_v2.66 reiniciando (razon ", reason, ") — ordenes preservadas.");
+      return;
+   }
+
+   if(esCierreTerminal)
+   {
+      // Sin CSV (el dia no ha terminado: se guardara en el reset tras reiniciar)
+      TelegramBotDetenido("Terminal o grafico cerrado (codigo " + IntegerToString(reason) +
+                          ") — ordenes y posiciones preservadas");
+      TelegramProcesarCola(10);
+      Print("London_Breakout_v2.66 detenido por cierre del terminal/grafico (razon ", reason,
+            ") — ordenes preservadas.");
       return;
    }
 
@@ -4577,6 +4591,8 @@ void OnChartEvent(const int id, const long& lparam,
 //      como en curso en vez de abortarse dejando la posicion huerfana
 //    - Cierre diario: CloseAllPositions comprueba el resultado; si queda alguna
 //      posicion se reintenta hasta 10 min antes del reset (alerta si no se logra)
+//    - OnDeinit: cerrar el terminal (REASON_CLOSE, p.ej. reinicio del VPS) o el
+//      grafico ya no cancela las ordenes pendientes; se avisa por Telegram
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
