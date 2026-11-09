@@ -62,6 +62,8 @@ input double MaxSpreadPips      = 0.0;  // Spread maximo para lanzar una bala (p
 
 input group "=== CHECKPOINTS (por bala) ==="
 input double CP1Pips           = 50.0; // CP1: Break Even (puntos del indice)
+input double BEOffsetPips      = 0.0;  // Puntos a favor sobre la entrada al poner el BE
+                                        // (p.ej. para cubrir la comision). 0 = v2.65
 input double CP3Pips           = 150.0;// CP3: SP entrada 2 a +100 puntos
 input double CP3_TrailingPips  = 50.0; // Trailing Stop desde CP3 (puntos)
 input double TrailingPasoPips  = 5.0;  // Mejora minima para mover el trailing (puntos)
@@ -900,6 +902,10 @@ int OnInit()
    //   pipSize = 1 * 1 = 1.00       → igual resultado [OK]
    pipSize = _Point * PuntosPerPip;
    if(pipSize <= 0) pipSize = _Point;
+
+   // v2.66: limpiar objetos de versiones anteriores (el panel usaba el prefijo "RRL_").
+   // El rango, los niveles y el panel se vuelven a dibujar mas abajo.
+   ObjectsDeleteAll(0, "RRL_");
 
    RecalcHours();
    SyncDashParams();
@@ -2329,9 +2335,11 @@ bool MoveToBreakEvenOk(ulong ticket)
 {
    if(!posInfo.SelectByTicket(ticket)) return false;
    double openPrice = posInfo.PriceOpen();
-   double newSL     = NormalizeDouble(openPrice, symDigits);
    double currentSL = posInfo.StopLoss();
    bool   isBuy     = (posInfo.PositionType() == POSITION_TYPE_BUY);
+   // v2.66: BE con offset opcional a favor (BEOffsetPips)
+   double beOffset  = MathMax(0, BEOffsetPips) * pipSize;
+   double newSL     = NormalizarPrecio(isBuy ? openPrice + beOffset : openPrice - beOffset);
 
    // Ya esta en BE o mejor — no hace falta mover
    bool yaEnBE = (isBuy  && currentSL >= newSL && currentSL != 0) ||
@@ -3708,7 +3716,10 @@ void RangoEliminar()
    ChartRedraw(0);
 }
 
-#define PANEL_PREFIX "RRL_"
+// v2.66: prefijo propio del panel. Antes era "RRL_", que abarcaba tambien RRL_NVL_,
+// RRL_VLIN_ y RRL_RANGO_: con DashVisible=false PanelDestroy() borraba cada minuto
+// el rango, los niveles y las lineas verticales.
+#define PANEL_PREFIX "RRL_PNL_"
 
 color CLR_BG      = C'18,20,32';
 color CLR_BORDER  = C'55,60,85';
@@ -4585,6 +4596,8 @@ void OnChartEvent(const int id, const long& lparam,
 //    - VentanaViernesPips (horas) acepta cualquier valor > 0
 //    - Eliminado codigo sin uso: GMT_LondresCierra, DetectBrokerGMTOffset,
 //      DetectarSLEnBala, MoveToBreakEven
+//    - Panel con prefijo propio "RRL_PNL_" (con DashVisible=false se borraban
+//      rango y niveles cada minuto). Nuevo input BEOffsetPips
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
