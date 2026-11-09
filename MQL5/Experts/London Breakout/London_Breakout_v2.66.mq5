@@ -461,12 +461,17 @@ void RecuperarEstadoDesdHistorial()
    // Si hubo deals cerrados, el balance inicio = balance actual - lo ganado/perdido
    balanceInicioDia = (pnlDiaUSD != 0) ? balanceActual - pnlDiaUSD : balanceActual;
 
-   // Rastrear balas del dia por comentario
-   // Formato comentario: RRL_US30_B1_E1, RRL_US30_B1_E2, etc.
-   bool balaVista[8]    = {false, false, false, false, false, false, false, false};
-   bool balaTerminada[8]= {false, false, false, false, false, false, false, false};
-   int  balaSL[8]       = {0, 0, 0, 0, 0, 0, 0, 0};
-   int  balaTP[8]       = {0, 0, 0, 0, 0, 0, 0, 0};
+   // v2.66: identificar cada bala por el comentario del deal de ENTRADA.
+   // Los deals de salida por SL/TP llevan el comentario del servidor
+   // ("[sl ...]", "[tp ...]"), por eso se asocian a su entrada via DEAL_POSITION_ID.
+   bool   bVista[8]  = {false, false, false, false, false, false, false, false};
+   bool   bActiva[8] = {false, false, false, false, false, false, false, false};
+   bool   bSL[8]     = {false, false, false, false, false, false, false, false};
+   bool   bBE[8]     = {false, false, false, false, false, false, false, false};
+   bool   bSP[8]     = {false, false, false, false, false, false, false, false};
+   bool   bTP[8]     = {false, false, false, false, false, false, false, false};
+   string e1Res[8];
+   for(int b = 0; b < 8; b++) e1Res[b] = "";
 
    for(int i = 0; i < totalDeals; i++)
    {
@@ -475,47 +480,37 @@ void RecuperarEstadoDesdHistorial()
       if(HistoryDealGetInteger(ticket, DEAL_MAGIC)  != MagicNumber) continue;
       if(HistoryDealGetString(ticket,  DEAL_SYMBOL) != _Symbol)     continue;
 
-      // Solo deals de salida (cierre de posicion)
       long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_IN)
+      {
+         int bIn = NumeroBalaDeComentario(HistoryDealGetString(ticket, DEAL_COMMENT));
+         if(bIn >= 1) bVista[bIn-1] = true;
+         continue;
+      }
       if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT) continue;
 
-      string comment = HistoryDealGetString(ticket, DEAL_COMMENT);
+      double precioEntrada = 0;
+      string cmt = TagDealSalida(ticket, precioEntrada);
+      int bOut = NumeroBalaDeComentario(cmt);
+      if(bOut < 1) continue;
 
-      // Identificar a que bala pertenece este deal
-      for(int b = 0; b < 8; b++)
-      {
-         string tag = "_B" + IntegerToString(b+1);
-         if(StringFind(comment, tag) < 0) continue;
-
-         balaVista[b] = true;
-
-         // Leer el motivo real de cierre del deal
-         long reason = HistoryDealGetInteger(ticket, DEAL_REASON);
-         if(reason == DEAL_REASON_SL)
-            balaSL[b]++;
-         else if(reason == DEAL_REASON_TP || reason == DEAL_REASON_EXPERT)
-            balaTP[b]++;
-      }
+      bVista[bOut-1] = true;
+      string res = ClasificarDealSalida(ticket, precioEntrada);
+      if(res == "SL")      bSL[bOut-1] = true;
+      else if(res == "BE") bBE[bOut-1] = true;
+      else if(res == "SP") bSP[bOut-1] = true;
+      else if(res == "TP") bTP[bOut-1] = true;
+      if(StringFind(cmt, "_E1") >= 0) e1Res[bOut-1] = res;
    }
 
-   // Reconstruir contadores
-   balasConSL = 0;
-   balasConTP = 0;
-   balasConBE = 0;
-   balasConSP = 0;
-   int balasTerminadas = 0;
-
-   // Primero identificar que balas tienen posiciones u ordenes activas AHORA
-   bool balaActiva[8] = {false, false, false, false, false, false, false, false};
+   // Balas con posiciones u ordenes activas AHORA
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
       if(posInfo.Magic()  != MagicNumber) continue;
       if(posInfo.Symbol() != _Symbol)     continue;
-      string comment = posInfo.Comment();
-      for(int b = 0; b < 8; b++)
-         if(StringFind(comment, "_B"+IntegerToString(b+1)) >= 0)
-            balaActiva[b] = true;
+      int bP = NumeroBalaDeComentario(posInfo.Comment());
+      if(bP >= 1) bActiva[bP-1] = true;
    }
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
@@ -523,108 +518,168 @@ void RecuperarEstadoDesdHistorial()
       if(ticket == 0) continue;
       if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
       if(OrderGetString(ORDER_SYMBOL) != _Symbol)     continue;
-      string comment = OrderGetString(ORDER_COMMENT);
-      for(int b = 0; b < 8; b++)
-         if(StringFind(comment, "_B"+IntegerToString(b+1)) >= 0)
-            balaActiva[b] = true;
+      int bO = NumeroBalaDeComentario(OrderGetString(ORDER_COMMENT));
+      if(bO >= 1) bActiva[bO-1] = true;
    }
 
+   // La bala actual es la de numero mas alto vista hoy (las balas son correlativas)
+   int maxBala = 0;
    for(int b = 0; b < 8; b++)
-   {
-      if(!balaVista[b]) continue;
+      if(bVista[b] || bActiva[b]) maxBala = b + 1;
 
-      // Si la bala tiene posiciones/ordenes activas = en curso, no terminada
-      if(balaActiva[b])
+   balasConSL  = 0;
+   balasConTP  = 0;
+   balasConBE  = 0;
+   balasConSP  = 0;
+   balaEnCurso = false;
+
+   for(int b = 0; b < maxBala; b++)
+   {
+      if(bActiva[b])
       {
          balas[b].active    = true;
          balas[b].terminada = false;
-         // Reconstruir checkpoints segun deals de salida existentes para esta bala
-         // Si hay un deal de salida con DEAL_REASON_EXPERT = E1 cerro en TP1
-         balas[b].tp1Done = (balaTP[b] >= 1);
-         // cp1Done: si tp1Done o si hay SP activo (SL movido a ganancia)
-         // Lo inferimos: si E1 ya cerro en TP, CP1 ya paso
-         balas[b].cp1Done = balas[b].tp1Done;
-         // cp3Done: si hay 2+ deals TP = E1 cerro y SP ya movido a +100
-         // Revisamos el SL actual de E2 para inferir si CP3 paso
-         if(balas[b].tp1Done)
-         {
-            string tagE2b = "_B" + IntegerToString(b+1) + "_BUY_E2";
-            string tagE2s = "_B" + IntegerToString(b+1) + "_SEL_E2";
-            for(int i = PositionsTotal() - 1; i >= 0; i--)
-            {
-               if(!posInfo.SelectByIndex(i)) continue;
-               if(posInfo.Magic()  != MagicNumber) continue;
-               if(posInfo.Symbol() != _Symbol)     continue;
-               string cmt = posInfo.Comment();
-               if(StringFind(cmt, tagE2b) < 0 && StringFind(cmt, tagE2s) < 0) continue;
-               double openPrice = posInfo.PriceOpen();
-               double sl        = posInfo.StopLoss();
-               double slPips    = MathAbs(sl - openPrice) / pipSize;
-               // Umbral dinamico: CP3 mueve el SL a (CP3Pips - CP1Pips) desde entrada
-               // Si el SL actual supera ese nivel → CP3 ya paso
-               // Usamos un margen de -5 pips para tolerar imprecisiones de precio
-               double umbralCP3 = CP3Pips - CP1Pips - 5.0;
-               double umbralCP1 = 0.0; // BE = openPrice exacto (>= 0 desde entrada)
-               if(slPips >= umbralCP3) balas[b].cp3Done = true;
-               else if(slPips > umbralCP1) balas[b].cp1Done = true;
-               break;
-            }
-         }
-         balaEnCurso = true;
-         continue;
-      }
+         balas[b].tp1Done   = (e1Res[b] == "TP");
+         balas[b].cp1Done   = balas[b].tp1Done;
 
-      // Sin actividad = bala terminada — clasificar por resultado
-      if(balaSL[b] > 0)
-      {
-         balasConSL++;
-         balas[b].terminada = true;
-         balas[b].resultado = "SL";
-         balasTerminadas++;
-      }
-      else if(balaTP[b] > 0)
-      {
-         balasConTP++;
-         balas[b].terminada = true;
-         balas[b].resultado = "TP";
-         balasTerminadas++;
-      }
-   }
-
-   // balaActual = balas terminadas + balas activas (max 1 activa a la vez)
-   int balasActivasAhora = 0;
-   for(int b = 0; b < 8; b++)
-      if(balaActiva[b]) { balasActivasAhora = 1; break; }
-
-   balaActual = balasTerminadas + balasActivasAhora;
-
-   // Reconstruir e2Abierta: si hay 2 posiciones activas de la misma bala
-   if(balaEnCurso)
-   {
-      int idx = balaActual - 1;
-      if(idx >= 0 && idx < 8)
-      {
-         int count = 0;
-         string tag = "_B" + IntegerToString(idx+1);
+         // Inferir CP1/CP3 por el SL actual de las posiciones abiertas (con signo)
+         string tagB = "_B" + IntegerToString(b+1) + "_";
+         int    nPos = 0;
          for(int i = PositionsTotal() - 1; i >= 0; i--)
          {
             if(!posInfo.SelectByIndex(i)) continue;
             if(posInfo.Magic()  != MagicNumber) continue;
             if(posInfo.Symbol() != _Symbol)     continue;
-            if(StringFind(posInfo.Comment(), tag) >= 0) count++;
+            string cmtP = posInfo.Comment();
+            if(StringFind(cmtP, tagB) < 0) continue;
+            nPos++;
+            bool   isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
+            if(balas[b].direction == 0) balas[b].direction = isBuy ? 1 : -1;
+            double sl    = posInfo.StopLoss();
+            if(sl == 0) continue;
+            double openP = posInfo.PriceOpen();
+            // Positivo = SL en zona de ganancia, negativo = SL en zona de perdida
+            double slPips = isBuy ? (sl - openP) / pipSize : (openP - sl) / pipSize;
+            if(slPips >= -0.5) balas[b].cp1Done = true;          // BE o mejor
+            if(StringFind(cmtP, "_E2") >= 0 && slPips >= CP3Pips - CP1Pips - 5.0)
+            {
+               balas[b].cp3Done = true;
+               balas[b].cp1Done = true;
+            }
          }
-         balas[idx].e2Abierta = (count >= 2);
+         balas[b].e2Abierta = (nPos >= 2);
+         balaEnCurso = true;
+         continue;
       }
+
+      if(!bVista[b]) continue; // bala sin deals: nunca se activo
+
+      // Bala terminada — misma prioridad que ManageCheckpointsBala: SL > BE > SP > TP
+      string res;
+      if(bSL[b])                          res = "SL";
+      else if(!bTP[b] && !bSP[b] && bBE[b]) res = "BE";
+      else if(bSP[b])                     res = "SP";
+      else if(bTP[b])                     res = "TP";
+      else                                res = "NA"; // solo cierres manuales
+
+      balas[b].active    = false;
+      balas[b].terminada = true;
+      balas[b].resultado = res;
+      if(res == "SL")      balasConSL++;
+      else if(res == "BE") balasConBE++;
+      else if(res == "SP") balasConSP++;
+      else if(res == "TP") balasConTP++;
    }
 
-   if(balaActual > 0 || balasConSL > 0 || balasConTP > 0)
+   balaActual = maxBala;
+
+   if(balaActual > 0)
    {
       Print("[RECUPERACION] Estado reconstruido desde historial:");
       Print(" Balas lanzadas hoy : ", balaActual);
-      Print(" Balas en SL        : ", balasConSL);
-      Print(" Balas en TP        : ", balasConTP);
-      Print(" Bala en curso      : ", balaEnCurso ? "SI" : "NO");
+      Print(" Resultados         : TP:", balasConTP, " SP:", balasConSP,
+            " BE:", balasConBE, " SL:", balasConSL);
+      Print(" Bala en curso      : ", balaEnCurso ? "SI (B" + IntegerToString(balaActual) + ")" : "NO");
    }
+}
+
+//+------------------------------------------------------------------+
+//| HISTORIAL: helpers de identificacion de deals (v2.66)            |
+//| Todos usan la seleccion de historial ACTIVA (HistorySelect).     |
+//+------------------------------------------------------------------+
+
+// Numero de bala (1-8) contenido en un comentario "..._B3_BUY_E1", 0 si ninguno
+int NumeroBalaDeComentario(string cmt)
+{
+   for(int b = 1; b <= 8; b++)
+      if(StringFind(cmt, "_B" + IntegerToString(b) + "_") >= 0) return b;
+   return 0;
+}
+
+// Comentario y precio del deal de ENTRADA de una posicion
+bool DatosEntradaPosicion(long positionId, string &comentario, double &precio)
+{
+   int total = HistoryDealsTotal();
+   for(int j = 0; j < total; j++)
+   {
+      ulong t = HistoryDealGetTicket(j);
+      if(t == 0) continue;
+      if(HistoryDealGetInteger(t, DEAL_POSITION_ID) != positionId) continue;
+      if(HistoryDealGetInteger(t, DEAL_ENTRY)       != DEAL_ENTRY_IN) continue;
+      comentario = HistoryDealGetString(t, DEAL_COMMENT);
+      precio     = HistoryDealGetDouble(t, DEAL_PRICE);
+      return true;
+   }
+   return false;
+}
+
+// Tag del EA para un deal de SALIDA: el comentario de su deal de entrada.
+// Si no se encuentra la entrada, se usa el comentario del propio deal.
+string TagDealSalida(ulong ticket, double &precioEntrada)
+{
+   string cmt = "";
+   precioEntrada = 0;
+   long pid = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+   if(DatosEntradaPosicion(pid, cmt, precioEntrada) && cmt != "")
+      return cmt;
+   return HistoryDealGetString(ticket, DEAL_COMMENT);
+}
+
+// Tolerancia (pips) para considerar un cierre como Break Even
+double ToleranciaBEPips()
+{
+   return MathMax(0.5, 0.2 * MathMin(StopLossPips, CP1Pips));
+}
+
+// Clasificar un deal de salida: "TP", "SL", "BE", "SP" o "MANUAL".
+// Compara precio de salida con precio de entrada (no profit == 0), con tolerancia.
+string ClasificarDealSalida(ulong ticket, double precioEntrada)
+{
+   long reason = HistoryDealGetInteger(ticket, DEAL_REASON);
+   if(reason == DEAL_REASON_TP) return "TP";
+
+   int signo = 0; // +1 ganancia, -1 perdida, 0 break even
+   if(precioEntrada > 0 && pipSize > 0)
+   {
+      double precioSalida = HistoryDealGetDouble(ticket, DEAL_PRICE);
+      // El deal de salida de una compra es DEAL_TYPE_SELL y viceversa
+      bool   eraCompra    = (HistoryDealGetInteger(ticket, DEAL_TYPE) == DEAL_TYPE_SELL);
+      double resPips      = eraCompra ? (precioSalida - precioEntrada) / pipSize
+                                      : (precioEntrada - precioSalida) / pipSize;
+      double tol          = ToleranciaBEPips();
+      signo = (resPips > tol) ? 1 : ((resPips < -tol) ? -1 : 0);
+   }
+   else
+   {
+      double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      signo = (profit > 0) ? 1 : ((profit < 0) ? -1 : 0);
+   }
+
+   if(reason == DEAL_REASON_SL || reason == DEAL_REASON_SO)
+      return (signo > 0) ? "SP" : ((signo < 0) ? "SL" : "BE");
+   if(reason == DEAL_REASON_EXPERT) // TP1 cerrado por el EA o cierre diario
+      return (signo > 0) ? "TP" : ((signo < 0) ? "SL" : "BE");
+   return "MANUAL";
 }
 
 //+------------------------------------------------------------------+
@@ -1989,24 +2044,12 @@ string DetectarCierreEntrada(int idx, int entrada)
       long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
       if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT) continue;
 
-      string comment = HistoryDealGetString(ticket, DEAL_COMMENT);
+      // v2.66: el tag esta en el deal de ENTRADA (el de salida lleva "[sl ...]")
+      double precioEntrada = 0;
+      string comment = TagDealSalida(ticket, precioEntrada);
       if(StringFind(comment, tag) < 0 && StringFind(comment, tagS) < 0) continue;
 
-      long   reason = HistoryDealGetInteger(ticket, DEAL_REASON);
-      double profit = HistoryDealGetDouble(ticket,  DEAL_PROFIT);
-      double entry  = HistoryDealGetDouble(ticket,  DEAL_PRICE);
-
-      if(reason == DEAL_REASON_TP)     return "TP";
-      if(reason == DEAL_REASON_SL)
-      {
-         // Distinguir SL real de BE/SP
-         // Si el profit es >= 0 con DEAL_REASON_SL → fue BE o SP
-         if(profit > 0)  return "SP";  // Stop Profit (ganancia)
-         if(profit == 0) return "BE";  // Break Even (neutro)
-         return "SL";                  // Perdida real
-      }
-      if(reason == DEAL_REASON_EXPERT) return "TP"; // cerrado por el EA = TP1
-      return "MANUAL";
+      return ClasificarDealSalida(ticket, precioEntrada);
    }
    return "";
 }
@@ -4124,6 +4167,11 @@ void OnChartEvent(const int id, const long& lparam,
 //    - OCO con red de seguridad: ManageCheckpointsBala cancela en cada tick las
 //      stops opuestas si OnTradeTransaction no lo hizo; si llegan a abrirse
 //      ambas direcciones se gestiona solo la primera y se avisa por Telegram
+//    - Historial: los deals de salida por SL/TP no llevan el tag del EA, asi
+//      que se asocian a su deal de entrada via DEAL_POSITION_ID. BE/SP/SL se
+//      clasifican comparando precio de salida y de entrada (con tolerancia)
+//    - RecuperarEstadoDesdHistorial reescrita: balaActual = bala mas alta vista
+//      hoy; CP1/CP3 inferidos del SL actual con signo (antes MathAbs)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
