@@ -252,6 +252,7 @@ bool   londresIniciadoAlertado = false;
 bool   cierreNYAlertado  = false; // true = alerta cierre NY ya enviada
 bool   resetEjecutado    = false; // flag externo que sobrevive al ResetDaily
 bool   reinicioTemporal  = false; // true = reinicio por cambio temporalidad/parametros
+datetime inicioIntentoCierre = 0; // primer intento fallido de cierre al final del dia (v2.66)
 
 // Estado del panel y bot
 bool   botPausado        = false; // true = no lanza nuevas balas
@@ -1182,10 +1183,36 @@ void OnTick()
    {
       if(!resetEjecutado)
       {
-         // Alerta cierre NY antes del reset
+         // v2.66: cerrar y COMPROBAR. Si alguna posicion no se cierra, reintentar
+         // hasta 10 minutos antes de resetear (antes se reseteaba igualmente y la
+         // posicion quedaba abierta sin estado).
+         bool todasCerradas = CloseAllPositions();
+         CancelPendingOrders();
+         if(!todasCerradas)
+         {
+            if(inicioIntentoCierre == 0) inicioIntentoCierre = TimeCurrent();
+            if(TimeCurrent() - inicioIntentoCierre < 600)
+            {
+               static datetime ultimoAvisoCierre = 0;
+               if(TimeCurrent() - ultimoAvisoCierre > 60)
+               {
+                  Print("CIERRE NY: quedan posiciones abiertas. Reintentando...");
+                  ultimoAvisoCierre = TimeCurrent();
+               }
+               if(dt.min != lastPanelMin) { PanelUpdate(); lastPanelMin = dt.min; }
+               return;
+            }
+            Print("CIERRE NY: no se pudieron cerrar todas las posiciones en 10 min. Reset sin cerrarlas.");
+            TelegramSend("🛑 <b>CIERRE NY INCOMPLETO</b>\n" +
+               "----------------\n" +
+               "Quedan posiciones del bot abiertas tras 10 min de reintentos.\n" +
+               "Conservan su SL/TP del broker. Revisalas manualmente.");
+         }
+
+         // Alerta cierre NY (despues del cierre, con el PnL ya actualizado)
          if(!cierreNYAlertado)
          {
-            double pnlNeto = GetPnLNetoDiarioPct();
+            double pnlNeto = GetPnLNetoDiarioPct(true);
             double pnlUSD  = balanceInicioDia * pnlNeto / 100.0;
             TelegramSend("🔔 <b>CIERRE SESIÓN NY</b>\n" +
                "----------------\n" +
@@ -1199,11 +1226,10 @@ void OnTick()
                "✅ Reset diario ejecutado.");
             cierreNYAlertado = true;
          }
-         CloseAllPositions();
-         CancelPendingOrders();
          ResetDaily();
-         resetEjecutado = true;
-         cierreNYHecho  = true;
+         resetEjecutado      = true;
+         cierreNYHecho       = true;
+         inicioIntentoCierre = 0;
       }
       if(dt.min != lastPanelMin) { PanelUpdate(); lastPanelMin = dt.min; }
       return;
@@ -2563,15 +2589,27 @@ void CancelPendingOrders()
 //+------------------------------------------------------------------+
 //| CERRAR TODAS LAS POSICIONES                                      |
 //+------------------------------------------------------------------+
-void CloseAllPositions()
+// v2.66: devuelve true si no queda ninguna posicion del EA abierta
+bool CloseAllPositions()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
       if(posInfo.Magic()  != MagicNumber) continue;
       if(posInfo.Symbol() != _Symbol)     continue;
-      trade.PositionClose(posInfo.Ticket());
+      ulong tk = posInfo.Ticket();
+      if(!trade.PositionClose(tk))
+         Print("CIERRE ERROR | ticket #", tk, " | ", trade.ResultRetcodeDescription());
    }
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic()  != MagicNumber) continue;
+      if(posInfo.Symbol() != _Symbol)     continue;
+      return false;
+   }
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -4537,6 +4575,8 @@ void OnChartEvent(const int id, const long& lparam,
 //      cerrar dentro del rango (antes valia cualquier racha antigua)
 //    - Bala con ordenes incompletas: si alguna ya se ejecuto, la bala se registra
 //      como en curso en vez de abortarse dejando la posicion huerfana
+//    - Cierre diario: CloseAllPositions comprueba el resultado; si queda alguna
+//      posicion se reintenta hasta 10 min antes del reset (alerta si no se logra)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
