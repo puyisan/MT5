@@ -57,7 +57,7 @@ public:
                           const ulong magic,const string symbol,const string version);
    bool              Enabled(void) const { return m_on; }
    string            FullPath(void) const;
-   void              OnDeal(const ulong deal,const string eaCloseReason,const double eaClosePrice);
+   string            OnDeal(const ulong deal,const string eaCloseReason,const double eaClosePrice);   // resumen o "" 
   };
 
 //+------------------------------------------------------------------+
@@ -110,18 +110,19 @@ bool CTradeJournal::WriteLine(const string line)
 //+------------------------------------------------------------------+
 //| Llamar desde OnTradeTransaction con cada DEAL_ADD                |
 //+------------------------------------------------------------------+
-void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason,const double eaClosePrice)
+string CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason,const double eaClosePrice)
   {
-   if(!m_on || deal==0) return;
-   if(!HistoryDealSelect(deal)) return;
-   if(HistoryDealGetString(deal,DEAL_SYMBOL)!=m_symbol) return;
-   if(HistoryDealGetInteger(deal,DEAL_MAGIC)!=(long)m_magic) return;
+   //--- se procesa siempre (para la notificación); el archivo solo se escribe si m_on
+   if(deal==0) return "";
+   if(!HistoryDealSelect(deal)) return "";
+   if(HistoryDealGetString(deal,DEAL_SYMBOL)!=m_symbol) return "";
+   if(HistoryDealGetInteger(deal,DEAL_MAGIC)!=(long)m_magic) return "";
    const ENUM_DEAL_ENTRY de=(ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY);
-   if(de!=DEAL_ENTRY_OUT && de!=DEAL_ENTRY_OUT_BY && de!=DEAL_ENTRY_INOUT) return;
+   if(de!=DEAL_ENTRY_OUT && de!=DEAL_ENTRY_OUT_BY && de!=DEAL_ENTRY_INOUT) return "";
 
    const ulong posId=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
-   if(PositionSelectByTicket(posId)) return;                 // cierre parcial: esperar al cierre total
-   if(!HistorySelectByPosition(posId)) return;
+   if(PositionSelectByTicket(posId)) return "";              // cierre parcial: esperar al cierre total
+   if(!HistorySelectByPosition(posId)) return "";
 
    //--- recorrer los deals de la posición
    datetime tIn=0,tOut=0;
@@ -155,7 +156,7 @@ void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason,const dou
       usd+=HistoryDealGetDouble(d,DEAL_PROFIT)+HistoryDealGetDouble(d,DEAL_COMMISSION)+
            HistoryDealGetDouble(d,DEAL_SWAP)+HistoryDealGetDouble(d,DEAL_FEE);
      }
-   if(tIn==0 || tOut==0) return;
+   if(tIn==0 || tOut==0) return "";
 
    const int    dir=(typeIn==DEAL_TYPE_BUY)?+1:-1;
    const double pt=SymbolInfoDouble(m_symbol,SYMBOL_POINT);
@@ -209,8 +210,10 @@ void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason,const dou
                                   (reqOut>0)?DoubleToString(reqOut,dg):"",DoubleToString(pxOut,dg),exitType,
                                   DoubleToString(usd,2),rStr,slipIn,slipOut,
                                   DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2),m_version);
-   if(WriteLine(line))
+   if(m_on && WriteLine(line))
       PrintFormat("Registro: posición #%I64u anotada (%s, %s USD, %s R)",posId,exitType,DoubleToString(usd,2),rStr);
+   return StringFormat("Cierre %s %s %s: %s %s USD%s",(dir>0)?"COMPRA":"VENTA",win,lvl,exitType,
+                       DoubleToString(usd,2),(rStr!="")?" ("+rStr+" R)":"");
   }
 
 #endif // SB_JOURNAL_MQH

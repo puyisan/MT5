@@ -41,16 +41,20 @@ private:
       const long lvl=(stops>freeze)?stops:freeze;
       return (double)(lvl+1)*m_sym.Point();
      }
+   int               m_errCount;
+   string            m_lastErr;
    void              LogFail(const string what)
      {
-      PrintFormat("Executor: %s falló. retcode=%u (%s) err=%d",what,m_trade.ResultRetcode(),
-                  m_trade.ResultRetcodeDescription(),GetLastError());
+      m_lastErr=StringFormat("%s falló: retcode=%u (%s) err=%d",what,m_trade.ResultRetcode(),
+                             m_trade.ResultRetcodeDescription(),GetLastError());
+      m_errCount++;
+      Print("Executor: "+m_lastErr);
      }
    bool              Mine(const string sym,const long magic) const
      { return(sym==m_symbol && magic==(long)m_magic); }
 
 public:
-                     CExecutor(void) : m_magic(0),m_symbol(""),m_whyPos(0)
+                     CExecutor(void) : m_magic(0),m_symbol(""),m_whyPos(0),m_errCount(0),m_lastErr("")
      { for(int i=0;i<8;i++) { m_whyTk[i]=0; m_whyTxt[i]=""; m_whyPx[i]=0.0; } }
    bool              Init(const string symbol,const ulong magic,const int deviationPts);
    double            NormPrice(const double p);
@@ -64,6 +68,12 @@ public:
    int               CloseAll(const string reason);
    string            CloseReason(const ulong posTicket) const
      { for(int i=0;i<8;i++) if(m_whyTk[i]==posTicket) return m_whyTxt[i]; return ""; }
+   int               ErrorCount(void) const { return m_errCount; }
+   string            LastError(void) const { return m_lastErr; }
+   int               CountPositions(void)
+     { int n=0; for(int i=PositionsTotal()-1;i>=0;i--) if(m_pos.SelectByIndex(i) && Mine(m_pos.Symbol(),m_pos.Magic())) n++; return n; }
+   int               CountPendings(void)
+     { int n=0; for(int i=OrdersTotal()-1;i>=0;i--) if(m_ord.SelectByIndex(i) && Mine(m_ord.Symbol(),m_ord.Magic())) n++; return n; }
    double            CloseRequestPrice(const ulong posTicket) const
      { for(int i=0;i<8;i++) if(m_whyTk[i]==posTicket) return m_whyPx[i]; return 0.0; }
    void              Manage(const double beAtR,const double beOffsetPts,const int maxHoldSec);

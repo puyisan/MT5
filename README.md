@@ -113,6 +113,18 @@ En MT5 para Mac (Wine) la carpeta está en
 `~/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files/`
 (o en la carpeta de datos que abre *Archivo → Abrir carpeta de datos*).
 
+### Protección y avisos (v1.11)
+- **Freno de emergencia** `InpMaxDDStopPct` (8 %): si el equity cae ese % desde su máximo, cancela las pendientes,
+  deja de abrir operaciones y avisa. `InpKillClosePositions` cierra también las abiertas (por defecto no: tienen SL).
+  En vivo, el pico y el freno se guardan en variables globales del terminal (`SB_<magic>_<cuenta>_pico/_freno`) y
+  sobreviven a reinicios. Para reanudar: adjuntar con `InpKillReset=true` y volver a ponerlo en `false`.
+- **Notificaciones push** `InpPush`: arranque y parada del EA, orden colocada, entrada, cierre (con USD y R),
+  cierre de viernes, freno, errores de ejecución y un resumen diario a las 16:45 NY. Requiere el MetaQuotes ID de la
+  app móvil en *Herramientas → Opciones → Notificaciones*.
+- **Archivo de estado** `SilverBullet_estado.csv` en `MQL5/Files`, sobrescrito cada 5 min aunque no haya ticks:
+  hora (servidor y UTC), estado, ventana, equity, balance, pico, DD, freno, posiciones, pendientes, conexión,
+  trading permitido y último error. El panel lo usa para avisar si el EA deja de dar señales.
+
 ### Notas de backtesting
 - Usa "Cada tick basado en ticks reales" para M1.
 - **Depósito en USD, no en pips**: en la pestaña *Configuración* del tester, en el desplegable de divisa junto al

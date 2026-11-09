@@ -8,7 +8,8 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.10"
+#property version   "1.11"
+#define SB_VERSION "1.11"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -18,6 +19,7 @@
 #include "Include\SB_Risk.mqh"
 #include "Include\SB_Executor.mqh"
 #include "Include\SB_Journal.mqh"
+#include "Include\SB_Monitor.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                           |
@@ -88,6 +90,16 @@ input int             InpMaxHoldMin        = 180;            // Duración máx. 
 input int             InpFridayCloseHourNY = 16;             // Viernes: cierre forzoso, hora NY (<0 = off)
 input int             InpFridayCloseMinNY  = 30;             // Viernes: cierre forzoso, minuto NY
 
+input group "=== Protección y avisos ==="
+input double          InpMaxDDStopPct      = 8.0;            // Freno: drawdown máx. de equity desde el pico (%), 0 = off
+input bool            InpKillClosePositions= false;          // Freno: cerrar también las posiciones abiertas
+input bool            InpKillReset         = false;          // Reiniciar freno y pico al adjuntar (volver a false después)
+input bool            InpPush              = true;           // Notificaciones push a la app móvil de MT5
+input int             InpHeartbeatHourNY   = 16;             // Resumen diario: hora NY (<0 = off)
+input int             InpHeartbeatMinNY    = 45;             // Resumen diario: minuto NY
+input string          InpStatusFile        = "SilverBullet_estado.csv"; // Archivo de estado en MQL5/Files ("" = off)
+input int             InpStatusEveryMin    = 5;              // Frecuencia del archivo de estado (min)
+
 input group "=== General ==="
 input ulong           InpMagic             = 20261108;       // Magic number
 input bool            InpDraw              = true;           // Dibujar FVG / barridos
@@ -128,6 +140,8 @@ CLiquidityMap g_liq;
 CRiskManager  g_risk;
 CExecutor     g_exec;
 CTradeJournal g_journal;
+CNotifier     g_ntf;
+CStatusFile   g_status;
 CNewBar       g_barExec, g_barSwing;
 
 int           g_hAtrExec  = INVALID_HANDLE;
@@ -138,6 +152,14 @@ MqlRates      g_rates[];
 
 ENUM_SB_STATE g_state     = SB_IDLE;
 int           g_win       = -1;
+bool          g_isTester  = false;
+double        g_peakEq    = 0.0;        // pico de equity (persistente en vivo vía variable global del terminal)
+bool          g_killed    = false;      // freno de emergencia activo
+string        g_gvPeak    = "";
+string        g_gvKill    = "";
+datetime      g_lastStatus= 0;
+int           g_lastHbDay = 0;
+int           g_errSeen   = 0;
 datetime      g_friCutoff = 0;          // hora servidor del cierre forzoso del viernes (0 = hoy no aplica)
 bool          g_friDone   = false;
 SSweepEvent   g_sweep;
@@ -158,10 +180,16 @@ struct SFunnel
    int               sweepsLowPrio, fvgBias, rejLate;
    int               placed, filled, expired;
    int               rejFriday, friCloses;
+   int               rejKill, kills;
    int               spreadN, spreadMin, spreadMax;
    double            spreadSum;
   };
 SFunnel       g_fn;
+
+//--- declaraciones adelantadas (supervisión, definidas más abajo)
+void KillInit(void);
+void CheckKill(void);
+void WriteStatus(const string forceState);
 
 //+------------------------------------------------------------------+
 void Log(const string s) { if(g_verbose) Print(s); }
@@ -296,6 +324,8 @@ void OnWindowChange(const int w)
 //+------------------------------------------------------------------+
 void TryEnter(const int w,const SFVG &f)
   {
+   if(g_killed)
+     { g_fn.rejKill++; Log("Entrada descartada: freno de emergencia activo"); return; }
    if(g_friCutoff>0 && TimeCurrent()>=g_friCutoff)
      { g_fn.rejFriday++; Log("Entrada descartada: pasado el cierre forzoso del viernes"); return; }
    if(g_exec.HasPosition() || g_exec.HasPending())
@@ -373,6 +403,10 @@ void TryEnter(const int w,const SFVG &f)
    Log(StringFormat("[%s] %s %s %.2f lotes | entrada %.5f SL %.5f TP %.5f | R:R %.2f | ticket #%I64u",
                     g_clock.WindowName(w),(kind==KIND_MARKET)?"MERCADO":"LIMIT",(dir>0)?"BUY":"SELL",
                     lots,effEntry,sl,tp,rr,ticket));
+   g_ntf.Send(StringFormat("Orden %s %s %.2f lotes @%s · SL %s · TP %s · R:R %.1f (%s %s)",
+                           (kind==KIND_MARKET)?"a mercado":"limitada",(dir>0)?"COMPRA":"VENTA",lots,
+                           DoubleToString(effEntry,_Digits),DoubleToString(sl,_Digits),DoubleToString(tp,_Digits),rr,
+                           g_clock.WindowName(w),PoolTypeToString(g_sweep.type)));
   }
 
 //+------------------------------------------------------------------+
@@ -584,9 +618,16 @@ int OnInit()
       const int dot=StringFind(jfile,".csv");
       jfile=(dot>0)?StringSubstr(jfile,0,dot)+"_backtest.csv":jfile+"_backtest";
      }
-   g_journal.Init(InpJournal && !optimizing,jfile,InpJournalCommon,tester,InpMagic,_Symbol,"1.10");
+   g_journal.Init(InpJournal && !optimizing,jfile,InpJournalCommon,tester,InpMagic,_Symbol,SB_VERSION);
    if(g_journal.Enabled() && !optimizing)
       PrintFormat("Registro de operaciones: %s",g_journal.FullPath());
+
+   //--- supervisión: notificaciones, estado y freno de emergencia
+   g_isTester=tester;
+   g_ntf.Init(InpPush,StringFormat("SB %s: ",_Symbol));
+   g_status.Init(InpStatusFile!="",InpStatusFile,InpJournalCommon);
+   KillInit();
+   if(!optimizing) EventSetTimer(60);
 
    ArraySetAsSeries(g_rates,true);
    ArraySetAsSeries(g_buf,true);
@@ -600,9 +641,17 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.10 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.11 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
+   //--- no repetir hoy el resumen diario si ya pasó su hora
+   {
+    MqlDateTime nd; TimeToStruct(g_clock.ServerToNY(TimeTradeServer()),nd);
+    if(nd.hour*60+nd.min>=InpHeartbeatHourNY*60+InpHeartbeatMinNY) g_lastHbDay=nd.year*10000+nd.mon*100+nd.day;
+   }
+   WriteStatus("");
+   g_ntf.Send(StringFormat("EA v%s iniciado · equity %.2f · freno a %.1f%% de DD%s",SB_VERSION,
+                           AccountInfoDouble(ACCOUNT_EQUITY),InpMaxDDStopPct,g_killed?" · FRENO ACTIVO":""));
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)
       PrintFormat("Aviso: divisa de cuenta '%s'. En el tester elige USD en lugar de 'pips' para que comisión y riesgo sean reales.",
                   AccountInfoString(ACCOUNT_CURRENCY));
@@ -637,6 +686,7 @@ void PrintFunnel(void)
                g_fn.placed,g_fn.filled,g_fn.expired);
    PrintFormat("Cierres forzosos de viernes ... %d  (entradas bloqueadas tras el corte %d)",
                g_fn.friCloses,g_fn.rejFriday);
+   PrintFormat("Freno de emergencia ........... %d activaciones  (entradas bloqueadas %d)",g_fn.kills,g_fn.rejKill);
    Print("===================================================================");
   }
 
@@ -644,6 +694,12 @@ void PrintFunnel(void)
 void OnDeinit(const int reason)
   {
    if(!MQLInfoInteger(MQL_OPTIMIZATION)) PrintFunnel();
+   EventKillTimer();
+   if(reason!=REASON_CHARTCHANGE && reason!=REASON_PARAMETERS && reason!=REASON_RECOMPILE)
+     {
+      WriteStatus("detenido");
+      g_ntf.Send(StringFormat("EA detenido (motivo %d). No abrirá operaciones hasta que vuelva a adjuntarse.",reason));
+     }
    if(g_hAtrExec !=INVALID_HANDLE) IndicatorRelease(g_hAtrExec);
    if(g_hAtrSwing!=INVALID_HANDLE) IndicatorRelease(g_hAtrSwing);
    if(g_hBiasMA  !=INVALID_HANDLE) IndicatorRelease(g_hBiasMA);
@@ -652,17 +708,133 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-//| Registro CSV: solo actúa cuando se cierra una posición del EA    |
+//| Supervisión: freno de emergencia, estado y avisos                |
+//+------------------------------------------------------------------+
+void KillInit(void)
+  {
+   const double eq=AccountInfoDouble(ACCOUNT_EQUITY), bal=AccountInfoDouble(ACCOUNT_BALANCE);
+   g_killed=false;
+   if(g_isTester) { g_peakEq=MathMax(eq,bal); return; }      // en el tester, solo en memoria
+   g_gvPeak=StringFormat("SB_%I64u_%I64d_pico",InpMagic,AccountInfoInteger(ACCOUNT_LOGIN));
+   g_gvKill=StringFormat("SB_%I64u_%I64d_freno",InpMagic,AccountInfoInteger(ACCOUNT_LOGIN));
+   if(InpKillReset)
+     {
+      GlobalVariableDel(g_gvPeak); GlobalVariableDel(g_gvKill);
+      Print("Freno: reiniciados el pico de equity y el freno (InpKillReset=true). Vuelve a ponerlo en false.");
+     }
+   g_peakEq=GlobalVariableCheck(g_gvPeak)?GlobalVariableGet(g_gvPeak):MathMax(eq,bal);
+   g_peakEq=MathMax(g_peakEq,eq);
+   GlobalVariableSet(g_gvPeak,g_peakEq);
+   g_killed=GlobalVariableCheck(g_gvKill) && GlobalVariableGet(g_gvKill)>0.5;
+   PrintFormat("Freno: pico de equity %.2f, drawdown actual %.2f%%, límite %.1f%%%s",g_peakEq,
+               (g_peakEq>0)?100.0*(g_peakEq-eq)/g_peakEq:0.0,InpMaxDDStopPct,
+               g_killed?" · ACTIVO desde una sesión anterior: no abrirá operaciones (reanudar con InpKillReset=true)":"");
+  }
+
+void CheckKill(void)
+  {
+   if(InpMaxDDStopPct<=0.0) return;
+   const double eq=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(eq>g_peakEq) { g_peakEq=eq; if(!g_isTester) GlobalVariableSet(g_gvPeak,eq); }
+   if(g_killed || g_peakEq<=0.0) return;
+   const double dd=100.0*(g_peakEq-eq)/g_peakEq;
+   if(dd<InpMaxDDStopPct) return;
+   g_killed=true;
+   g_fn.kills++;
+   if(!g_isTester) GlobalVariableSet(g_gvKill,1.0);
+   if(g_exec.HasPending()) g_exec.CancelPendings();
+   const int n=InpKillClosePositions?g_exec.CloseAll("freno"):0;
+   const string msg=StringFormat("FRENO DE EMERGENCIA: drawdown %.2f%% desde el pico %.2f (límite %.1f%%). "
+                                 "No abrirá más operaciones%s. Revisa antes de reanudar.",
+                                 dd,g_peakEq,InpMaxDDStopPct,(n>0)?StringFormat("; %d posición(es) cerrada(s)",n):"");
+   Print(msg);
+   g_ntf.Send(msg);
+   WriteStatus("");
+  }
+
+void WriteStatus(const string forceState)
+  {
+   if(!g_status.Enabled()) return;
+   SStatusRow r;
+   const double eq=AccountInfoDouble(ACCOUNT_EQUITY);
+   r.version     =SB_VERSION;
+   r.estado      =(forceState!="")?forceState:(g_killed?"FRENO":StateToString(g_state));
+   r.ventana     =g_clock.WindowName(g_win);
+   r.equity      =eq;
+   r.balance     =AccountInfoDouble(ACCOUNT_BALANCE);
+   r.pico        =g_peakEq;
+   r.dd_pct      =(g_peakEq>0.0)?(g_peakEq-eq)/g_peakEq:0.0;
+   r.freno       =g_killed;
+   r.posiciones  =g_exec.CountPositions();
+   r.pendientes  =g_exec.CountPendings();
+   r.conectado   =(bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+   r.trading     =(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
+   r.errores     =g_exec.ErrorCount();
+   r.ultimo_error=g_exec.LastError();
+   if(g_status.Write(r)) g_lastStatus=TimeTradeServer();
+  }
+
+//+------------------------------------------------------------------+
+//| Cada minuto, también sin ticks (fines de semana, mercado quieto) |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   if(g_isTester) return;
+   //--- errores de ejecución nuevos
+   if(g_exec.ErrorCount()!=g_errSeen)
+     {
+      g_errSeen=g_exec.ErrorCount();
+      g_ntf.Send("Error de ejecución: "+g_exec.LastError());
+     }
+   //--- latido en archivo
+   const datetime now=TimeTradeServer();
+   if((long)(now-g_lastStatus)>=(long)MathMax(1,InpStatusEveryMin)*60) WriteStatus("");
+   //--- resumen diario por push (días laborables, hora NY)
+   if(InpHeartbeatHourNY>=0)
+     {
+      MqlDateTime nd; TimeToStruct(g_clock.ServerToNY(now),nd);
+      const int day=nd.year*10000+nd.mon*100+nd.day;
+      if(nd.day_of_week>=1 && nd.day_of_week<=5 && day!=g_lastHbDay &&
+         nd.hour*60+nd.min>=InpHeartbeatHourNY*60+InpHeartbeatMinNY)
+        {
+         g_lastHbDay=day;
+         const double eq=AccountInfoDouble(ACCOUNT_EQUITY);
+         g_ntf.Send(StringFormat("Resumen diario: activo · equity %.2f · DD %.2f%% (freno a %.1f%%) · posiciones %d · errores %d%s",
+                                 eq,(g_peakEq>0)?100.0*(g_peakEq-eq)/g_peakEq:0.0,InpMaxDDStopPct,
+                                 g_exec.CountPositions(),g_exec.ErrorCount(),g_killed?" · FRENO ACTIVO":""));
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Entradas y cierres: aviso push y registro CSV                    |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &request,const MqlTradeResult &result)
   {
-   if(trans.type!=TRADE_TRANSACTION_DEAL_ADD || !g_journal.Enabled()) return;
-   g_journal.OnDeal(trans.deal,g_exec.CloseReason(trans.position),g_exec.CloseRequestPrice(trans.position));
+   if(trans.type!=TRADE_TRANSACTION_DEAL_ADD) return;
+   if(HistoryDealSelect(trans.deal) &&
+      HistoryDealGetString(trans.deal,DEAL_SYMBOL)==_Symbol &&
+      HistoryDealGetInteger(trans.deal,DEAL_MAGIC)==(long)InpMagic &&
+      (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+     {
+      g_ntf.Send(StringFormat("Entrada %s %.2f lotes @%s (%s)",
+                              (HistoryDealGetInteger(trans.deal,DEAL_TYPE)==DEAL_TYPE_BUY)?"COMPRA":"VENTA",
+                              HistoryDealGetDouble(trans.deal,DEAL_VOLUME),
+                              DoubleToString(HistoryDealGetDouble(trans.deal,DEAL_PRICE),_Digits),
+                              HistoryDealGetString(trans.deal,DEAL_COMMENT)));
+     }
+   const string closed=g_journal.OnDeal(trans.deal,g_exec.CloseReason(trans.position),g_exec.CloseRequestPrice(trans.position));
+   if(closed!="")
+     {
+      g_ntf.Send(closed+StringFormat(" · balance %.2f",AccountInfoDouble(ACCOUNT_BALANCE)));
+      WriteStatus("");
+     }
   }
 
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   CheckKill();                                    // una lectura de equity y una comparación
    //--- cierre forzoso del viernes: una comparación de enteros por tick
    if(g_friCutoff>0 && !g_friDone && TimeCurrent()>=g_friCutoff)
      {
@@ -674,6 +846,7 @@ void OnTick()
          g_fn.friCloses+=n;
          Log(StringFormat("Cierre forzoso del viernes (%02d:%02d NY): %d posición(es) cerrada(s)%s",
                           InpFridayCloseHourNY,InpFridayCloseMinNY,n,hadPending?", pendientes canceladas":""));
+         g_ntf.Send(StringFormat("Cierre forzoso del viernes: %d posición(es) cerrada(s)%s",n,hadPending?", pendientes canceladas":""));
         }
       if(!g_exec.HasPosition()) g_friDone=true;     // si algo falló, reintenta en el siguiente tick
      }
