@@ -2769,8 +2769,11 @@ string GetNombreFestivo()
       if(m==7 && d==5 && dow==1)                            return "Independence Day - Observancia (NYSE)";
       // Labor Day (1er lunes de septiembre)
       if(m==9 && dow==1 && d<=7)                            return "Labor Day (NYSE)";
-      // Thanksgiving (4to jueves de noviembre)
+      // Thanksgiving (4to jueves de noviembre) y viernes siguiente
       if(m==11 && dow==4 && d>=22 && d<=28)                 return "Thanksgiving (NYSE)";
+      if(m==11 && dow==5 && d>=23 && d<=29)                 return "Black Friday - cierre anticipado (NYSE)";
+      // Viernes Santo
+      if(EsViernesSanto(dt))                                return "Good Friday (NYSE)";
       // Navidad
       if(m==12 && d==25)                                    return "Navidad (NYSE)";
       if(m==12 && d==24 && dow==5)                          return "Navidad - Observancia (NYSE)";
@@ -2783,6 +2786,8 @@ string GetNombreFestivo()
       if(m==1 && d==1)                                      return "Año Nuevo (LSE)";
       if(m==1 && d==2 && dow==1)                            return "Año Nuevo - Observancia (LSE)";
       if(m==12 && d==25)                                    return "Navidad (LSE)";
+      if(EsViernesSanto(dt))                                return "Good Friday (LSE)";
+      if(EsLunesPascua(dt))                                 return "Easter Monday (LSE)";
       if(m==12 && d==26)                                    return "Boxing Day (LSE)";
       if(m==12 && d==27 && dow==1)                          return "Boxing Day - Observancia (LSE)";
       if(m==12 && d==28 && dow==1)                          return "Navidad/Boxing Day - Observancia (LSE)";
@@ -2793,6 +2798,38 @@ string GetNombreFestivo()
    }
    return "";
 }
+
+//+------------------------------------------------------------------+
+//| PASCUA (algoritmo gregoriano anonimo) — v2.66: compartido US/UK  |
+//+------------------------------------------------------------------+
+datetime FechaPascua(int y)
+{
+   int a = y % 19;
+   int b = y / 100;
+   int c = y % 100;
+   int d2= b / 4;
+   int e = b % 4;
+   int f = (b + 8) / 25;
+   int g = (b - f + 1) / 3;
+   int h = (19*a + b - d2 - g + 15) % 30;
+   int i = c / 4;
+   int k = c % 4;
+   int l = (32 + 2*e + 2*i - h - k) % 7;
+   int n2= (a + 11*h + 22*l) / 451;
+   int easterMonth = (h + l - 7*n2 + 114) / 31;
+   int easterDay   = ((h + l - 7*n2 + 114) % 31) + 1;
+   return StringToTime(StringFormat("%04d.%02d.%02d", y, easterMonth, easterDay));
+}
+
+bool EsMismaFecha(datetime t, MqlDateTime &dt)
+{
+   MqlDateTime x;
+   TimeToStruct(t, x);
+   return (x.year == dt.year && x.mon == dt.mon && x.day == dt.day);
+}
+
+bool EsViernesSanto(MqlDateTime &dt) { return EsMismaFecha(FechaPascua(dt.year) - 2 * 86400, dt); }
+bool EsLunesPascua(MqlDateTime &dt)  { return EsMismaFecha(FechaPascua(dt.year) + 86400, dt); }
 
 bool EsFestivoUS(MqlDateTime &dt)
 {
@@ -2845,17 +2882,12 @@ bool EsFestivoUS(MqlDateTime &dt)
    }
 
    // Viernes despues de Accion de Gracias (NYSE cierra temprano, evitamos el dia)
-   if(m==11 && dt.day_of_week==5)
-   {
-      // Si ayer fue el 4to jueves de noviembre
-      MqlDateTime dtAyer;
-      TimeToStruct(TimeCurrent() - 86400, dtAyer);
-      if(dtAyer.mon==11 && dtAyer.day_of_week==4)
-      {
-         int semana = (dtAyer.day-1)/7 + 1;
-         if(semana == 4) return true;
-      }
-   }
+   // v2.66: calculado sobre la fecha recibida (antes usaba TimeCurrent()-1 dia,
+   // por lo que el aviso de "festivo manana" nunca lo detectaba)
+   if(m==11 && dt.day_of_week==5 && d >= 23 && d <= 29) return true; // jueves previo = dia 22-28
+
+   // Viernes Santo: la NYSE cierra (v2.66: antes solo lo cubria el filtro UK)
+   if(EsViernesSanto(dt)) return true;
 
    // Observancia: si festivo fijo cae sabado → viernes anterior no opera
    // si cae domingo → lunes siguiente no opera
@@ -2891,35 +2923,9 @@ bool EsFestivoUK(MqlDateTime &dt)
    // Observancia: si cae domingo → lunes
    if(m==1 && d==2 && dt.day_of_week==1) return true;
 
-   // --- Good Friday (Viernes Santo): variable ---
-   // Se calcula con el algoritmo de Easter
-   // Easter Sunday calculation (Anonymous Gregorian)
-   {
-      int a = y % 19;
-      int b = y / 100;
-      int c = y % 100;
-      int d2= b / 4;
-      int e = b % 4;
-      int f = (b + 8) / 25;
-      int g = (b - f + 1) / 3;
-      int h = (19*a + b - d2 - g + 15) % 30;
-      int i = c / 4;
-      int k = c % 4;
-      int l = (32 + 2*e + 2*i - h - k) % 7;
-      int n2= (a + 11*h + 22*l) / 451;
-      int easterMonth = (h + l - 7*n2 + 114) / 31;
-      int easterDay   = ((h + l - 7*n2 + 114) % 31) + 1;
-      // Good Friday = Easter - 2 dias
-      datetime easter  = StringToTime(StringFormat("%04d.%02d.%02d", y, easterMonth, easterDay));
-      datetime goodFri = easter - 2 * 86400;
-      // Easter Monday = Easter + 1 dia
-      datetime easterMon = easter + 86400;
-      MqlDateTime dtGF, dtEM;
-      TimeToStruct(goodFri,   dtGF);
-      TimeToStruct(easterMon, dtEM);
-      if(dt.mon == dtGF.mon && dt.day == dtGF.day) return true;  // Good Friday
-      if(dt.mon == dtEM.mon && dt.day == dtEM.day) return true;  // Easter Monday
-   }
+   // --- Good Friday (Viernes Santo) y Easter Monday: variables ---
+   if(EsViernesSanto(dt))  return true;
+   if(EsLunesPascua(dt))   return true;
 
    // --- Early May Bank Holiday: primer lunes de mayo ---
    // Excepcion: en 2020 se movio al 8 mayo (VE Day)
@@ -4608,6 +4614,9 @@ void OnChartEvent(const int id, const long& lparam,
 //    - Reporte mensual: lee las 19 columnas del CSV (faltaban Balas_SP y
 //      Balas_BE) y muestra SP/BE. Filas escritas antes de v2.63 (17 columnas)
 //      no son compatibles
+//    - Festivos: Viernes Santo tambien en el filtro US (la NYSE cierra);
+//      Black Friday calculado sobre la fecha evaluada (fallaba en el aviso de
+//      "festivo manana"). Calculo de Pascua compartido
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
