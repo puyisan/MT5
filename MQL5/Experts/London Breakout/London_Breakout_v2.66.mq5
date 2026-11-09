@@ -1163,7 +1163,9 @@ void OnTick()
       // v2.66: si el reset de cierre del dia anterior no llego a ejecutarse (sin
       // ticks despues de closeTime, p.ej. un viernes), hacerlo ahora. Si no, el
       // nuevo dia arrancaria con el rango y las balas del anterior.
-      if(currentDay != -1 && !resetEjecutado)
+      // (solo si el cierre no cruza la medianoche: en ese caso el reset "de ayer"
+      //  ocurre justo despues de las 00:00 en el bloque de RESET DIARIO)
+      if(currentDay != -1 && !resetEjecutado && closeAllH > nyOpenH)
       {
          Print("Nuevo dia sin reset del anterior — cerrando posiciones y ejecutando reset diario.");
          CloseAllPositions();
