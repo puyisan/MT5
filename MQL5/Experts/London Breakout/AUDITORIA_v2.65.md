@@ -11,6 +11,68 @@ El más grave: la identificación de cierres por comentario no funciona con SL/T
 
 ---
 
+## Estado en v2.66
+
+Todas las correcciones están en `London_Breakout_v2.66.mq5` (la v2.65 se conserva sin cambios). Cada
+una va en su propio commit en `main`. **No se ha compilado ni probado en MetaEditor/MT5**: compila con F7
+y haz un backtest antes de usarla en demo.
+
+| # | Hallazgo | Estado en v2.66 |
+|---|---|---|
+| 1 | No compila | ✅ Línea eliminada; globales tardíos movidos a la cabecera |
+| 2 | Cierres SL/TP sin el tag | ✅ Salidas asociadas a su entrada por `DEAL_POSITION_ID`; BE/SP/SL por precio; recuperación reescrita |
+| 3 | Sin gestión tras la ventana | ✅ `ManageCheckpointsBala` en cada tick mientras haya bala |
+| 4 | OCO / netting | ✅ `INIT_FAILED` en netting; cancelación de opuestas en cada tick; aviso si se abren ambas |
+| 5 | Lotes | ✅ `OrderCalcProfit`; paso de lote del broker; lote < mínimo → no opera |
+| 6 | Modo de llenado | ✅ `SetTypeFillingBySymbol` |
+| 7 | DST del broker | ✅ Input `ModoDSTBroker`; viernes en `CierreViernesBroker` |
+| 8 | Rango | ✅ Velas cerradas por rango de tiempo; se fija tras la sesión; reintento |
+| 9 | Límite diario | ✅ Solo deals del EA; input `ReservaDeslizamientoPct` |
+| 10 | Entrada y spread | ✅ `OffsetEntradaPips`, `CompensarSpreadBuy`, `MaxSpreadPips`; comprobación de distancia previa |
+| 11 | Telegram bloqueante | ✅ Cola en `OnTimer`; desactivado en el probador |
+| 12 | Trailing | ✅ `TrailingPasoPips`; stops/freeze level en BE, SP y trailing |
+| 13 | Confirmación | ✅ Cuenta desde la vela más reciente |
+| 14 | Bala huérfana | ✅ Si una orden se ejecutó, la bala queda en curso |
+| 15 | Cierre diario | ✅ Se comprueba y reintenta 10 min antes del reset |
+| 16 | `REASON_CLOSE` | ✅ Cerrar terminal o gráfico ya no cancela pendientes |
+| 17 | Reporte mensual | ✅ Lee las 19 columnas |
+| Bajos | Festivos, código muerto, prefijo del panel, L553, BE | ✅ Viernes Santo US, Black Friday, reset perdido al cambiar de día, `RRL_PNL_`, signo del SL, `BEOffsetPips` |
+
+### Inputs nuevos
+
+| Input | Por defecto | Valor que reproduce v2.65 |
+|---|---|---|
+| `ReservaDeslizamientoPct` | 0.0 | 0.0 |
+| `OffsetEntradaPips` | 1.0 | 1.0 |
+| `CompensarSpreadBuy` | **true** | false |
+| `MaxSpreadPips` | 0.0 (off) | 0.0 |
+| `BEOffsetPips` | 0.0 | 0.0 |
+| `TrailingPasoPips` | **5.0** | 0.0 |
+| `ModoDSTBroker` | **AUTO** | EUROPA (en el probador AUTO ya aplica EUROPA) |
+| `CierreViernesBroker` | 22 | 22 |
+
+Eliminado: `GMT_LondresCierra` (no se usaba). `ValorPuntoPorLote` queda solo como respaldo.
+
+### Cambios de comportamiento a tener en cuenta
+- Cuentas **netting**: el EA no arranca.
+- Si el lote por riesgo es menor que el mínimo del broker, **no se lanza la bala** (antes se subía al mínimo).
+- La BuyStop suma el spread actual (`CompensarSpreadBuy=true`): menos rupturas falsas, entrada algo peor.
+- La ventana NY exige el rango **definitivo**, que se fija en el primer tick tras la sesión de Londres.
+- El PnL diario, el límite y el objetivo cuentan solo las operaciones de este EA.
+- Si una bala no llega a activarse, al cancelarse sus órdenes en el fin de ventana llega el mensaje
+  "BALA X CERRADA CANCELADA" (antes no se procesaba).
+
+### Pendiente / no cubierto
+- Observaciones de estrategia (SL relativo al rango, rearme tras SL, inicio 09:00 NY): no se tocaron.
+- Cierres anticipados del NYSE (3 jul, 24 dic) a las 13:00 NY: no se filtran.
+- Brokers cuyo cierre NY cae a las 00:00 o después: el bloque de reset ya fallaba en v2.65 (antes de la
+  apertura NY el EA cree estar "después del cierre"); no se ha rediseñado.
+- El estado no se guarda en `GlobalVariable`: tras un reinicio se reconstruye desde el historial (ahora sí
+  funciona), pero los contadores de checkpoints del CSV (`statCP1`…) del día se pierden.
+- Filas del CSV escritas antes de v2.63 (17 columnas) no son compatibles con el reporte mensual.
+
+---
+
 ## 🔴 Críticos
 
 ### 1. No compila tal como está (L221 / L234)
