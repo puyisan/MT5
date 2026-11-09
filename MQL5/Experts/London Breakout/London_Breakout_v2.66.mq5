@@ -20,6 +20,10 @@ input double RiskPerBala       = 0.5;  // Riesgo por bala (% balance)
 input double MaxDailyLossPct   = 2.0;  // Limite maximo de perdida diaria (% balance)
 input double MaxDailyProfitPct = 3.0;  // Limite maximo de ganancia diaria (% balance)
                                         // 0 = desactivado (sin limite de ganancia)
+input double ReservaDeslizamientoPct = 0.0; // Reserva (% balance) para deslizamiento del SL
+                                        // Se resta del presupuesto diario: con 0.25 y
+                                        // limite 2%, la ultima bala solo sale si quedan
+                                        // 0.5% + 0.25% libres. 0 = sin reserva (v2.65)
 input double LoteMinBroker     = 0.01; // Lote minimo permitido por el broker
 input double ValorPuntoPorLote = 1.0;  // [Respaldo] Valor en USD de 1 pip por lote
                                         // v2.66: el lote se calcula con OrderCalcProfit
@@ -217,6 +221,7 @@ int    balasConTP       = 0;
 int    balasConBE       = 0;
 int    balasConSP       = 0;
 double balanceInicioDia = 0;
+datetime inicioDiaOperativo = 0; // inicio del dia de trading (reset diario o medianoche) — v2.66
 
 // Confirmacion de reingreso
 bool   esperandoConfirmacion = false; // true = bala termino, esperando velas dentro del rango
@@ -498,11 +503,13 @@ void RecuperarEstadoDesdHistorial()
       if(ticket == 0) continue;
       if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
       if(HistoryDealGetString(ticket,  DEAL_SYMBOL) != _Symbol)    continue;
-      long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
-      if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT) continue;
+      // v2.66: todos los deals de trading (la comision puede cobrarse en la entrada)
+      long tipoDeal = HistoryDealGetInteger(ticket, DEAL_TYPE);
+      if(tipoDeal != DEAL_TYPE_BUY && tipoDeal != DEAL_TYPE_SELL) continue;
       pnlDiaUSD += HistoryDealGetDouble(ticket, DEAL_PROFIT)
                 +  HistoryDealGetDouble(ticket, DEAL_SWAP)
-                +  HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+                +  HistoryDealGetDouble(ticket, DEAL_COMMISSION)
+                +  HistoryDealGetDouble(ticket, DEAL_FEE);
    }
    double balanceActual = AccountInfoDouble(ACCOUNT_BALANCE);
    // Si hubo deals cerrados, el balance inicio = balance actual - lo ganado/perdido
@@ -743,11 +750,11 @@ double GetPnLNetoDiarioPct(bool forzar = false)
    int nowMin = dt.hour * 60 + dt.min;
    if(!forzar && nowMin == cachePnLMin) return cachePnLPct;
 
-   // Solo deals cerrados — el balance ya refleja operaciones finalizadas
-   // NO incluir flotante para evitar que posiciones abiertas distorsionen
-   // el PnL del dia y los contadores de TP/SL
-   double balanceActual = AccountInfoDouble(ACCOUNT_BALANCE);
-   double pnlNeto       = balanceActual - balanceInicioDia;
+   // Solo deals cerrados — NO incluir flotante para evitar que posiciones
+   // abiertas distorsionen el PnL del dia y los contadores de TP/SL.
+   // v2.66: solo los deals de ESTE EA (magic + simbolo). Antes se usaba
+   // balance - balanceInicioDia, que incluia otros EAs, depositos y retiros.
+   double pnlNeto = PnLCerradoDiaUSD();
 
    cachePnLPct = (pnlNeto / balanceInicioDia) * 100.0;
    cachePnLMin = nowMin;
@@ -787,19 +794,49 @@ int GetBalasRestantes()
 //+------------------------------------------------------------------+
 double GetPresupuestoRestantePct()
 {
-   // Fallback si balanceInicioDia no esta inicializado (BT arranque)
-   double balIni = balanceInicioDia > 0
-                   ? balanceInicioDia
-                   : AccountInfoDouble(ACCOUNT_BALANCE);
-   if(balIni <= 0) return MaxDailyLossPct;
-
-   double balanceActual = AccountInfoDouble(ACCOUNT_BALANCE);
-   double pnlNeto       = (balanceActual - balIni) / balIni * 100.0;
+   // v2.66: PnL del dia solo de este EA (ver GetPnLNetoDiarioPct)
+   double pnlNeto = GetPnLNetoDiarioPct();
 
    // Solo perdidas — si el dia es positivo el presupuesto esta intacto
    double perdidaPct = (pnlNeto < 0) ? MathAbs(pnlNeto) : 0;
-   double restante   = MaxDailyLossPct - perdidaPct;
+   // Reserva opcional para cubrir el deslizamiento del SL de la ultima bala
+   double restante   = MaxDailyLossPct - perdidaPct - MathMax(0, ReservaDeslizamientoPct);
    return MathMax(0, restante);
+}
+
+//+------------------------------------------------------------------+
+//| PnL CERRADO DEL DIA EN DIVISA — SOLO DEALS DE ESTE EA (v2.66)    |
+//| Incluye beneficio, swap, comision (tambien la de entrada) y fee. |
+//| Excluye depositos, retiros y operaciones de otros EAs.           |
+//+------------------------------------------------------------------+
+double PnLCerradoDiaUSD()
+{
+   datetime desde = inicioDiaOperativo;
+   if(desde <= 0)
+   {
+      datetime ahora = TimeCurrent();
+      MqlDateTime dtA;
+      TimeToStruct(ahora, dtA);
+      desde = ahora - dtA.hour * 3600 - dtA.min * 60 - dtA.sec;
+   }
+   if(!HistorySelect(desde, TimeCurrent() + 86400)) return 0;
+
+   double pnl   = 0;
+   int    total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      if(HistoryDealGetInteger(ticket, DEAL_MAGIC)  != MagicNumber) continue;
+      if(HistoryDealGetString(ticket,  DEAL_SYMBOL) != _Symbol)     continue;
+      long tipo = HistoryDealGetInteger(ticket, DEAL_TYPE);
+      if(tipo != DEAL_TYPE_BUY && tipo != DEAL_TYPE_SELL) continue;
+      pnl += HistoryDealGetDouble(ticket, DEAL_PROFIT)
+           + HistoryDealGetDouble(ticket, DEAL_SWAP)
+           + HistoryDealGetDouble(ticket, DEAL_COMMISSION)
+           + HistoryDealGetDouble(ticket, DEAL_FEE);
+   }
+   return pnl;
 }
 
 //+------------------------------------------------------------------+
@@ -881,6 +918,8 @@ int OnInit()
    balanceInicioDia = AccountInfoDouble(ACCOUNT_BALANCE);
    MqlDateTime dtInit;
    TimeToStruct(TimeCurrent(), dtInit);
+   // Dia operativo: desde la medianoche broker (no hay operativa entre el reset y medianoche)
+   inicioDiaOperativo = TimeCurrent() - dtInit.hour * 3600 - dtInit.min * 60 - dtInit.sec;
    currentDay = dtInit.day;
 
    // Si el EA arranca despues de la ventana de Londres,
@@ -2473,6 +2512,7 @@ void ResetDaily()
    tpDiarioAlcanzado       = false;
    opuestaAlertadaBala     = -1;
    balanceInicioDia        = AccountInfoDouble(ACCOUNT_BALANCE);
+   inicioDiaOperativo      = TimeCurrent();
    velasConfirmadas        = 0;
    ultimaVelaContada       = 0;
    esperandoConfirmacion   = false;
@@ -2830,6 +2870,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    // y si corresponde evaluar nueva bala de inmediato
    if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
    {
+      // v2.66: un deal nuevo cambia el PnL del dia — invalidar la cache
+      cachePnLMin = -1;
+
       int idx = balaActual - 1;
       if(idx < 0 || idx > 7) return;
       if(!balas[idx].active) return;
@@ -3934,7 +3977,7 @@ void CSVGuardarDia()
    if(balaActual == 0) return;
 
    double balFin    = AccountInfoDouble(ACCOUNT_BALANCE);
-   double pnlUSD    = balFin - balanceInicioDia;
+   double pnlUSD    = PnLCerradoDiaUSD(); // v2.66: solo deals de este EA
    double pnlPct    = balanceInicioDia > 0 ? pnlUSD / balanceInicioDia * 100.0 : 0;
    double rangePips = rangeSet ? (rangeHigh - rangeLow) / pipSize : 0;
    bool   limAlc    = GetPnLNetoDiarioPct() <= -MaxDailyLossPct;
@@ -4308,6 +4351,9 @@ void OnChartEvent(const int id, const long& lparam,
 //      se fija en el primer tick tras la sesion (incluye la ultima vela completa)
 //      y se reintenta si el historial no esta disponible. La ventana NY exige
 //      el rango definitivo (rangeFijado)
+//    - PnL diario y presupuesto de riesgo solo con deals de este EA (antes el
+//      balance de la cuenta: otros EAs, depositos y retiros). Comision de
+//      entrada y DEAL_FEE incluidos. Nuevo input ReservaDeslizamientoPct
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
