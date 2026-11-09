@@ -22,6 +22,12 @@ private:
    COrderInfo        m_ord;
    ulong             m_magic;
    string            m_symbol;
+   //--- motivo de los últimos cierres hechos por el EA (para el registro CSV)
+   ulong             m_whyTk[8];
+   string            m_whyTxt[8];
+   int               m_whyPos;
+   void              NoteClose(const ulong tk,const string why)
+     { m_whyTk[m_whyPos]=tk; m_whyTxt[m_whyPos]=why; m_whyPos=(m_whyPos+1)%8; }
 
    double            MinDist(void)
      {
@@ -39,7 +45,8 @@ private:
      { return(sym==m_symbol && magic==(long)m_magic); }
 
 public:
-                     CExecutor(void) : m_magic(0),m_symbol("") {}
+                     CExecutor(void) : m_magic(0),m_symbol(""),m_whyPos(0)
+     { for(int i=0;i<8;i++) { m_whyTk[i]=0; m_whyTxt[i]=""; } }
    bool              Init(const string symbol,const ulong magic,const int deviationPts);
    double            NormPrice(const double p);
    double            MarketPrice(const int dir);
@@ -50,6 +57,8 @@ public:
    bool              HasPending(void);
    bool              CancelPendings(void);
    int               CloseAll(const string reason);
+   string            CloseReason(const ulong posTicket) const
+     { for(int i=0;i<8;i++) if(m_whyTk[i]==posTicket) return m_whyTxt[i]; return ""; }
    void              Manage(const double beAtR,const double beOffsetPts,const int maxHoldSec);
   };
 
@@ -178,6 +187,7 @@ int CExecutor::CloseAll(const string reason)
       if(!m_pos.SelectByIndex(i) || !Mine(m_pos.Symbol(),m_pos.Magic())) continue;
       const ulong tk=m_pos.Ticket();
       ResetLastError();
+      NoteClose(tk,reason);
       if(!m_trade.PositionClose(tk)) { LogFail(StringFormat("PositionClose #%I64u (%s)",tk,reason)); continue; }
       const uint rc=m_trade.ResultRetcode();
       if(rc!=TRADE_RETCODE_DONE && rc!=TRADE_RETCODE_DONE_PARTIAL)
@@ -217,6 +227,7 @@ void CExecutor::Manage(const double beAtR,const double beOffsetPts,const int max
       if(maxHoldSec>0 && (long)(TimeCurrent()-m_pos.Time())>=maxHoldSec)
         {
          ResetLastError();
+         NoteClose(tk,"tiempo");
          if(!m_trade.PositionClose(tk)) LogFail(StringFormat("PositionClose #%I64u (tiempo)",tk));
          else PrintFormat("Executor: posición #%I64u cerrada por tiempo máximo",tk);
          continue;

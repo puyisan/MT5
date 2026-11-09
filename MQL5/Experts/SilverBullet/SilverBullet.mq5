@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.08"
+#property version   "1.09"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -17,6 +17,7 @@
 #include "Include\SB_Liquidity.mqh"
 #include "Include\SB_Risk.mqh"
 #include "Include\SB_Executor.mqh"
+#include "Include\SB_Journal.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                           |
@@ -95,6 +96,11 @@ input bool            InpVerbose           = true;           // Log detallado
 input group "=== Optimización ==="
 input int             InpTesterMinTrades   = 10;             // Mín. operaciones para puntuar en OnTester (antes 30)
 
+input group "=== Registro de operaciones (CSV) ==="
+input bool            InpJournal           = true;           // Escribir una línea por operación cerrada
+input string          InpJournalFile       = "SilverBullet_operaciones.csv"; // Archivo en MQL5/Files (tester: sufijo _backtest)
+input bool            InpJournalCommon     = false;          // Usar la carpeta común de terminales (Common/Files)
+
 //+------------------------------------------------------------------+
 //| Utilidades                                                       |
 //+------------------------------------------------------------------+
@@ -121,6 +127,7 @@ CFVGDetector  g_fvg;
 CLiquidityMap g_liq;
 CRiskManager  g_risk;
 CExecutor     g_exec;
+CTradeJournal g_journal;
 CNewBar       g_barExec, g_barSwing;
 
 int           g_hAtrExec  = INVALID_HANDLE;
@@ -570,6 +577,17 @@ int OnInit()
    g_risk.Init(_Symbol,InpMagic,InpRiskPct,InpRiskOnEquity,InpMaxDailyLossPct,InpCommissionPerLot,InpMaxSpreadAbsPts);
    if(!g_exec.Init(_Symbol,InpMagic,InpSlippagePts)) return INIT_FAILED;
 
+   //--- registro CSV: en el tester va a otro archivo (y se vacía en cada prueba); nunca en optimización
+   string jfile=InpJournalFile;
+   if(tester)
+     {
+      const int dot=StringFind(jfile,".csv");
+      jfile=(dot>0)?StringSubstr(jfile,0,dot)+"_backtest.csv":jfile+"_backtest";
+     }
+   g_journal.Init(InpJournal && !optimizing,jfile,InpJournalCommon,tester,InpMagic,_Symbol,"1.09");
+   if(g_journal.Enabled() && !optimizing)
+      PrintFormat("Registro de operaciones: %s",g_journal.FullPath());
+
    ArraySetAsSeries(g_rates,true);
    ArraySetAsSeries(g_buf,true);
    ZeroMemory(g_sweep);
@@ -582,7 +600,7 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.08 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.09 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)
@@ -634,6 +652,15 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
+//| Registro CSV: solo actúa cuando se cierra una posición del EA    |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &request,const MqlTradeResult &result)
+  {
+   if(trans.type!=TRADE_TRANSACTION_DEAL_ADD || !g_journal.Enabled()) return;
+   g_journal.OnDeal(trans.deal,g_exec.CloseReason(trans.position));
+  }
+
+//+------------------------------------------------------------------+
 void OnTick()
   {
    //--- cierre forzoso del viernes: una comparación de enteros por tick
@@ -641,7 +668,7 @@ void OnTick()
      {
       const bool hadPending=g_exec.HasPending();
       if(hadPending) g_exec.CancelPendings();
-      const int n=g_exec.CloseAll("cierre forzoso viernes");
+      const int n=g_exec.CloseAll("viernes");
       if(n>0 || hadPending)
         {
          g_fn.friCloses+=n;
