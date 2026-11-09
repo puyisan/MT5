@@ -1343,37 +1343,32 @@ bool ConfirmacionReingreso()
    int copiadas = CopyRates(_Symbol, PERIOD_M1, 1, VelasConfirmacion + 30, velas);
    if(copiadas <= 0) return false;
 
-   // Iterar de la MAS ANTIGUA a la MAS RECIENTE para contar consecutivas
+   // v2.66: contar desde la vela cerrada MAS RECIENTE hacia atras.
+   // Antes se recorria de la mas antigua a la mas reciente y se aceptaba la
+   // PRIMERA racha de N velas aunque las posteriores ya estuvieran fuera del rango.
    // CopyRates retorna [0]=mas antigua, [n-1]=mas reciente
    int consecutivas = 0;
-   datetime ultimaValida = 0;
-
-   for(int i = 0; i < copiadas; i++)
+   for(int i = copiadas - 1; i >= 0; i--)
    {
-      // Ignorar velas ya contadas en ciclos anteriores
-      if(velas[i].time <= ultimaVelaContada) continue;
+      // Velas anteriores al fin de la bala no cuentan
+      if(velas[i].time <= ultimaVelaContada) break;
 
       double cierre = velas[i].close;
-      if(cierre >= rangeLow && cierre <= rangeHigh)
-      {
-         consecutivas++;
-         ultimaValida = velas[i].time;
-         if(consecutivas >= VelasConfirmacion)
-         {
-            // Confirmacion alcanzada
-            ultimaVelaContada     = ultimaValida;
-            velasConfirmadas      = consecutivas;
-            esperandoConfirmacion = false;
-            Print("CONFIRMACION REINGRESO: ", consecutivas, "/", VelasConfirmacion,
-                  " velas M1 cerradas dentro del rango. Bala disponible.");
-            return true;
-         }
-      }
-      else
-      {
-         // Vela fuera del rango rompe la racha consecutiva
-         consecutivas = 0;
-      }
+      if(cierre < rangeLow || cierre > rangeHigh) break; // la racha se corta
+
+      consecutivas++;
+      if(consecutivas >= VelasConfirmacion) break;
+   }
+
+   if(consecutivas >= VelasConfirmacion)
+   {
+      // Confirmacion alcanzada con las N velas cerradas mas recientes
+      ultimaVelaContada     = velas[copiadas - 1].time;
+      velasConfirmadas      = consecutivas;
+      esperandoConfirmacion = false;
+      Print("CONFIRMACION REINGRESO: ", consecutivas, "/", VelasConfirmacion,
+            " velas M1 cerradas dentro del rango. Bala disponible.");
+      return true;
    }
 
    // Log periodico cada minuto para no saturar
@@ -4513,6 +4508,8 @@ void OnChartEvent(const int id, const long& lparam,
 //      sincrono dentro de OnTick; desactivado en el probador
 //    - Trailing con paso minimo (input TrailingPasoPips). BE, SP y trailing
 //      comprueban lado del precio, stops level y freeze level
+//    - Confirmacion de reingreso: las N velas M1 cerradas MAS RECIENTES deben
+//      cerrar dentro del rango (antes valia cualquier racha antigua)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
