@@ -782,6 +782,10 @@ int OnInit()
 {
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(30);
+   // v2.66: modo de llenado segun el simbolo (CTrade usa FOK por defecto y
+   // muchos brokers de indices solo aceptan IOC/Return → error 10030)
+   if(!trade.SetTypeFillingBySymbol(_Symbol))
+      Print("AVISO: no se pudo determinar el modo de llenado del simbolo; se usa el de CTrade.");
 
    // v2.66: la logica de 2 entradas (E1/E2) con SL/TP propios exige cuenta HEDGING.
    // En netting E1 y E2 se fusionan en una sola posicion con un unico SL/TP.
@@ -4232,6 +4236,7 @@ void OnChartEvent(const int id, const long& lparam,
 //    - Lotes: perdida por lote con OrderCalcProfit (ValorPuntoPorLote queda como
 //      respaldo); paso de lote del broker; si el lote < minimo no se opera
 //      (antes se subia al minimo y se excedia el riesgo)
+//    - Modo de llenado segun el simbolo (SetTypeFillingBySymbol)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
