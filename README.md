@@ -10,7 +10,7 @@ registro CSV, freno y avisos. **Copia las dos carpetas** (`IntradayMomentum` y `
 - Controles cada 30 min de 10:00 a 15:30 NY; largo si el precio supera max(banda superior, VWAP), corto si cae
   bajo min(banda inferior, VWAP); salida cuando cruza ese stop dinámico; cierre obligatorio 15:55 NY.
 - SL de catástrofe en el servidor y lote por % de riesgo hasta ese SL, con tope de apalancamiento 4x.
-- Preset de backtest: `MQL5/Profiles/Tester/IntradayMomentum_v010_backtest.set`.
+- Preset de backtest: `MQL5/Profiles/Tester/IntradayMomentum_v100_backtest.set`.
 - Protocolo: diseño 2022-2024, validación una sola vez 2025-2026, sin optimizar las reglas del artículo.
 
 > El Silver Bullet (abajo) quedó **aparcado**: sin ventaja demostrable fuera de muestra con el spread de la cuenta.

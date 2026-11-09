@@ -23,8 +23,8 @@
 //|  SL, con tope de apalancamiento.                                 |
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "0.10"
-#define IM_VERSION "0.10"
+#property version   "1.00"
+#define IM_VERSION "1.00"
 #property description "Intraday momentum (Noise Area) en el S&P 500 CFD, sesión regular de NY"
 
 #include "..\SilverBullet\Include\SB_Defines.mqh"
