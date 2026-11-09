@@ -1035,6 +1035,12 @@ void OnTick()
       return;
    }
 
+   // Gestion de la bala en curso (BE, SP, trailing) en CUALQUIER momento del dia.
+   // v2.66: antes solo se gestionaba dentro de la ventana NY, por lo que entre
+   // cancelTime y closeTime las posiciones abiertas quedaban sin BE ni trailing.
+   if(balaEnCurso && balaActual > 0)
+      ManageCheckpointsBala(balaActual - 1);
+
    if(!CanTradeToday(dt.day_of_week)) return;
 
    // Calcular rango de Londres — throttle: max 1 vez por minuto
@@ -1097,9 +1103,7 @@ void OnTick()
          VLinDisbujar();
       }
 
-      if(balaEnCurso && balaActual > 0)
-         ManageCheckpointsBala(balaActual - 1);
-
+      // La gestion de la bala en curso se hace al principio de OnTick (v2.66)
       if(!balaEnCurso && !HayOrdenesOPosicionesActivas())
          TryLanzarBala();
    }
@@ -4055,6 +4059,8 @@ void OnChartEvent(const int id, const long& lparam,
 //    - Compila: eliminada la asignacion global sin tipo de festivoAlertado
 //    - Globales declarados al final del archivo movidos a la cabecera
 //    - Eliminado #property strict (directiva de MQL4)
+//    - ManageCheckpointsBala se ejecuta en todo momento, no solo en la ventana
+//      NY: las posiciones abiertas tras cancelTime siguen con BE/SP/trailing
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
