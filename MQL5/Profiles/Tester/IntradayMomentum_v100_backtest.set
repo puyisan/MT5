@@ -1,4 +1,4 @@
-;IntradayMomentum v1.00 - backtest de referencia en US500Roll (reglas del articulo, sin optimizar)
+;IntradayMomentum v1.01 - backtest de referencia en US500Roll (reglas del articulo, sin optimizar)
 ;Cambios sobre los valores por defecto: InpRiskPct=1, InpMaxDDStopPct=0 (freno desactivado solo en backtest)
 ;Diseno: 2022.01.01-2024.12.31 | Validacion (una sola vez): 2025.01.01-2026.11.07 | 1 minuto OHLC | 20000 USD
 InpBrokerGMTWinter=2
@@ -31,3 +31,4 @@ InpVerbose=true
 InpJournal=true
 InpJournalFile=IntradayMomentum_operaciones.csv
 InpTesterMinTrades=30
+InpAllowAnySymbol=false

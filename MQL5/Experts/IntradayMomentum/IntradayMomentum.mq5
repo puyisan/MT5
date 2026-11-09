@@ -23,8 +23,8 @@
 //|  SL, con tope de apalancamiento.                                 |
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.00"
-#define IM_VERSION "1.00"
+#property version   "1.01"
+#define IM_VERSION "1.01"
 #property description "Intraday momentum (Noise Area) en el S&P 500 CFD, sesión regular de NY"
 
 #include "..\SilverBullet\Include\SB_Defines.mqh"
@@ -78,6 +78,7 @@ input bool            InpVerbose           = true;           // Log detallado
 input bool            InpJournal           = true;           // Registro CSV de operaciones
 input string          InpJournalFile       = "IntradayMomentum_operaciones.csv"; // Archivo (tester: sufijo _backtest)
 input int             InpTesterMinTrades   = 30;             // Mín. operaciones para puntuar en OnTester
+input bool            InpAllowAnySymbol    = false;          // Permitir símbolos que no sean el S&P 500 (solo para pruebas)
 
 //+------------------------------------------------------------------+
 //| Globales                                                         |
@@ -340,8 +341,15 @@ int OnInit()
    ZeroMemory(g_fn);
    if(!optimizing) EventSetTimer(60);
 
-   if(StringFind(_Symbol,"US500")<0)
-      PrintFormat("Aviso: estrategia diseñada para el S&P 500 (US500Roll); símbolo actual %s",_Symbol);
+   //--- la lógica depende de la sesión regular del S&P 500: rechazar otros símbolos por defecto
+   string symU=_Symbol; StringToUpper(symU);
+   const bool isSPX=(StringFind(symU,"US500")>=0 || StringFind(symU,"SPX")>=0 || StringFind(symU,"SP500")>=0);
+   if(!isSPX && !InpAllowAnySymbol)
+     {
+      PrintFormat("ERROR: IntradayMomentum está diseñado para el S&P 500 (US500Roll). Símbolo actual: %s. "
+                  "Elige US500Roll en el tester (o activa InpAllowAnySymbol solo para pruebas).",_Symbol);
+      return INIT_PARAMETERS_INCORRECT;
+     }
    PrintFormat("IntradayMomentum v%s iniciado: %s, riesgo %.2f%%, apalancamiento máx. %.1fx, lookback %d sesiones, controles %02d:%02d-%02d:%02d NY cada %d min, cierre %02d:%02d NY",
                IM_VERSION,_Symbol,InpRiskPct,InpMaxLeverage,InpLookbackDays,InpFirstCheckMinNY/60,InpFirstCheckMinNY%60,
                InpLastCheckMinNY/60,InpLastCheckMinNY%60,InpCheckEveryMin,InpCloseMinNY/60,InpCloseMinNY%60);
