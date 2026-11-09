@@ -1,7 +1,7 @@
 ;London Breakout v2.66 - backtest con los valores por defecto de v2.66
-;Cambios sobre los valores por defecto: ModoDSTBroker=1 (EUROPA, explicito), TelegramEnabled=false
+;Cambios sobre los valores por defecto: ModoDSTBroker=2 (EEUU: el broker cambia de hora con EE.UU., comprobado con la apertura NY en marzo), TelegramEnabled=false
 ;Probador: cuenta HEDGING | modelo "Cada tick basado en ticks reales" | simbolo US30 del broker
-;ModoDSTBroker: 1=EUROPA (por defecto aqui), 2=EEUU si tu broker cambia de hora con EE.UU. (0=AUTO en el probador = EUROPA)
+;ModoDSTBroker: 2=EEUU (este broker), 1=EUROPA, 0=AUTO (en el probador AUTO aplica EUROPA)
 ;PuntosPerPip=100 asume _Point=0.01 (1 pip = 1 punto del indice). Comprueba 'pipSize' en el diario al arrancar
 ;Los inputs visuales (niveles, rango, lineas, dashboard) no se incluyen: quedan con sus valores por defecto
 RiskPerBala=0.5
@@ -38,7 +38,7 @@ MagicNumber=80082505
 TradeComment=RRL_US30
 UsarDSTAutomatico=true
 GMT_Broker_Base=2
-ModoDSTBroker=1
+ModoDSTBroker=2
 CierreViernesBroker=22
 GMT_Broker_Manual=2
 GMT_Londres_Manual=0
