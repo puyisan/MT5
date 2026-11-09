@@ -64,6 +64,8 @@ input group "=== CHECKPOINTS (por bala) ==="
 input double CP1Pips           = 50.0; // CP1: Break Even (puntos del indice)
 input double CP3Pips           = 150.0;// CP3: SP entrada 2 a +100 puntos
 input double CP3_TrailingPips  = 50.0; // Trailing Stop desde CP3 (puntos)
+input double TrailingPasoPips  = 5.0;  // Mejora minima para mover el trailing (puntos)
+                                        // v2.66: evita un PositionModify por tick
 input bool   UseTrailingCP3    = true;  // [true] TS activo desde CP3
 input bool   RemoveTP2atCP4    = false; // [true] En TP2 elimina el TP y dejacorrer el TS 
 					// captura movimientos mayores
@@ -2270,13 +2272,11 @@ bool MoveToBreakEvenOk(ulong ticket)
                  (!isBuy && currentSL <= newSL && currentSL != 0);
    if(yaEnBE) return true;
 
-   // Validar stops level
-   long   stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist  = stopsLvl * _Point;
+   // Validar stops level, freeze level y lado del precio (v2.66)
    double curPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                             : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double distSL   = MathAbs(curPrice - newSL);
-   if(stopsLvl > 0 && distSL < minDist) return false; // diferir al proximo tick
+   if(!ModificacionPermitida(isBuy, newSL, currentSL, posInfo.TakeProfit()))
+      return false; // diferir al proximo tick
 
    bool ok = trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
    if(ok) Print("BE activado | ticket #", ticket, " | SL → ", DoubleToString(newSL, symDigits),
@@ -2354,17 +2354,19 @@ bool MoveStopToProfit(ulong ticket, double profitPips)
                      (!isBuy && (currentSL == 0 || newSL < currentSL));
    if(!shouldMove) return true; // ya esta en ese nivel o mejor
 
-   // Validar stops level del broker
-   long   stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist  = stopsLvl * _Point;
+   // Validar stops level, freeze level y lado del precio (v2.66)
    double curPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                             : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double distSL   = MathAbs(curPrice - newSL);
-   if(stopsLvl > 0 && distSL < minDist)
+   if(!ModificacionPermitida(isBuy, newSL, currentSL, posInfo.TakeProfit()))
    {
-      Print("SP AVISO  | ticket #", ticket,
-            " | Dist SL (", DoubleToString(distSL/_Point,0),
-            " pts) < stops level (", stopsLvl, " pts). Diferido al proximo tick.");
+      static datetime ultimoAvisoSP = 0;
+      if(TimeCurrent() - ultimoAvisoSP > 30)
+      {
+         Print("SP AVISO  | ticket #", ticket,
+               " | SL ", DoubleToString(newSL, symDigits), " no permitido ahora (precio ",
+               DoubleToString(curPrice, symDigits), ", stops/freeze level). Diferido.");
+         ultimoAvisoSP = TimeCurrent();
+      }
       return false; // diferir — el caller no marcara el checkpoint
    }
 
@@ -2388,17 +2390,48 @@ void ApplyTrailingStop(ulong ticket, double trailingPips)
    double trailDist = trailingPips * pipSize;
    double currentSL = posInfo.StopLoss();
    double currentTP = posInfo.TakeProfit();
-   if(posInfo.PositionType() == POSITION_TYPE_BUY)
+   bool   isBuy     = (posInfo.PositionType() == POSITION_TYPE_BUY);
+   // v2.66: mover solo si mejora al menos TrailingPasoPips (antes en cada tick)
+   double paso      = MathMax(_Point, TrailingPasoPips * pipSize);
+
+   double newSL = isBuy
+                  ? NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_BID) - trailDist, symDigits)
+                  : NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK) + trailDist, symDigits);
+
+   bool mejora = (currentSL == 0) ||
+                 ( isBuy && newSL - currentSL >= paso) ||
+                 (!isBuy && currentSL - newSL >= paso);
+   if(!mejora) return;
+   if(!ModificacionPermitida(isBuy, newSL, currentSL, currentTP)) return;
+
+   if(!trade.PositionModify(ticket, newSL, currentTP))
+      Print("TS ERROR  | ticket #", ticket, " | ", trade.ResultRetcodeDescription(),
+            " | newSL: ", DoubleToString(newSL, symDigits));
+}
+
+//+------------------------------------------------------------------+
+//| SE PUEDE MODIFICAR EL SL AHORA? (v2.66)                          |
+//| - nuevo SL del lado correcto del precio                          |
+//| - a la distancia minima del broker (stops level)                 |
+//| - SL/TP actuales fuera de la zona de congelacion (freeze level)  |
+//+------------------------------------------------------------------+
+bool ModificacionPermitida(bool isBuy, double newSL, double currentSL, double currentTP)
+{
+   double precio = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                         : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if(precio <= 0) return false;
+   if( isBuy && newSL >= precio) return false;
+   if(!isBuy && newSL <= precio) return false;
+
+   double stops  = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)  * _Point;
+   double freeze = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL) * _Point;
+   if(stops > 0 && MathAbs(precio - newSL) < stops) return false;
+   if(freeze > 0)
    {
-      double newSL = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_BID) - trailDist, symDigits);
-      // Mover si newSL es mejor, o si no habia SL previo (currentSL==0)
-      if(newSL > currentSL || currentSL == 0) trade.PositionModify(ticket, newSL, currentTP);
+      if(currentSL != 0 && MathAbs(precio - currentSL) <= freeze) return false;
+      if(currentTP != 0 && MathAbs(precio - currentTP) <= freeze) return false;
    }
-   else
-   {
-      double newSL = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK) + trailDist, symDigits);
-      if(newSL < currentSL || currentSL == 0) trade.PositionModify(ticket, newSL, currentTP);
-   }
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -4478,6 +4511,8 @@ void OnChartEvent(const int id, const long& lparam,
 //      normalizados al tick size
 //    - Telegram: cola enviada desde OnTimer (1 msg/s) en vez de WebRequest
 //      sincrono dentro de OnTick; desactivado en el probador
+//    - Trailing con paso minimo (input TrailingPasoPips). BE, SP y trailing
+//      comprueban lado del precio, stops level y freeze level
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
