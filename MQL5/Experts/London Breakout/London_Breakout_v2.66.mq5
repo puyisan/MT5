@@ -205,6 +205,7 @@ double rangeHigh  = 0;
 double rangeLow   = 0;
 bool   rangeSet   = false;
 bool   rangeFijado= false; // true = rango definitivo al cerrar sesion Londres
+bool   rangoEnVivo= false; // true = la sesion de Londres se siguio en vivo hoy (v2.66)
 
 // Sistema de balas
 Bala   balas[8];
@@ -888,8 +889,7 @@ int OnInit()
    int londonEndMin = londonEndH * 60 + londonEndM;
    if(nowMinInit > londonEndMin)
    {
-      UpdateRange(londonStartH * 60 + londonStartM, londonEndMin);
-      if(rangeSet)
+      if(UpdateRange(londonStartH * 60 + londonStartM, londonEndMin))
       {
          rangeFijado = true;
          londresIniciadoAlertado = true; // suprimir alerta de inicio (ya paso)
@@ -902,7 +902,7 @@ int OnInit()
          // El mensaje solo se envia en tiempo real al cierre de la sesion de Londres
       }
       else
-         Print(" ADVERTENCIA: No se pudo reconstruir el rango de Londres.");
+         Print(" ADVERTENCIA: No se pudo reconstruir el rango de Londres. Se reintentara en OnTick.");
    }
 
    // Si el EA arranca en un dia diferente al ultimo registrado (ej. lunes tras
@@ -1005,7 +1005,7 @@ int OnInit()
    reinicioTemporal = false;
 
    // Si el EA arranca durante la ventana NY y el rango ya esta fijado → dibujar niveles
-   if(rangeSet && NivelesVisible)
+   if(rangeFijado && NivelesVisible)
    {
       MqlDateTime dtNow;
       TimeToStruct(TimeCurrent(), dtNow);
@@ -1160,13 +1160,14 @@ void OnTick()
 
    if(!CanTradeToday(dt.day_of_week)) return;
 
-   // Calcular rango de Londres — throttle: max 1 vez por minuto
+   // Calcular rango de Londres en vivo (solo velas cerradas) — max 1 vez por minuto
    if(nowMin >= londonStart && nowMin <= londonEnd && !rangeFijado)
    {
       if(dt.min != lastRangeMin)
       {
          UpdateRange(londonStart, londonEnd);
          lastRangeMin = dt.min;
+         rangoEnVivo  = true;
          RangoDisbujar();
 
          // Alerta inicio de sesion Londres — una sola vez
@@ -1179,27 +1180,48 @@ void OnTick()
                "Balance:  $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
             londresIniciadoAlertado = true;
          }
-         if(nowMin >= londonEnd)
+      }
+      if(dt.min != lastPanelMin) { PanelUpdate(); lastPanelMin = dt.min; }
+      return;
+   }
+
+   // v2.66: fijar el rango en el primer tick POSTERIOR a la sesion de Londres,
+   // cuando la ultima vela M1 (londonEnd) ya esta cerrada. Antes se fijaba en el
+   // minuto londonEnd con esa vela recien abierta. Si falla (historial M1 aun no
+   // sincronizado) se reintenta en los ticks siguientes (max 1 vez por segundo).
+   if(!rangeFijado && nowMin > londonEnd)
+   {
+      static datetime ultimoIntentoRango = 0;
+      static datetime ultimoAvisoRango   = 0;
+      if(TimeCurrent() != ultimoIntentoRango)
+      {
+         ultimoIntentoRango = TimeCurrent();
+         if(UpdateRange(londonStart, londonEnd))
          {
             rangeFijado = true;
             Print("RANGO FIJADO: ", DoubleToString((rangeHigh-rangeLow)/pipSize,1),
                   " pips | Alto:", rangeHigh, " Bajo:", rangeLow);
             RangoDisbujar();
             VLinDisbujar();
-            TelegramSend("📐 <b>RANGO DE LONDRES FIJADO</b>\n" +
-               "----------------\n" +
-               "Alto:     " + DoubleToString(rangeHigh, symDigits) + "\n" +
-               "Bajo:     " + DoubleToString(rangeLow,  symDigits) + "\n" +
-               "Amplitud: " + DoubleToString((rangeHigh-rangeLow)/pipSize,1) + " pips\n" +
-               "NY Open:  " + IntegerToString(nyOpenH) + ":00 broker");
+            // Telegram solo si la sesion se siguio en vivo (no al reconstruir tras un reinicio)
+            if(rangoEnVivo)
+               TelegramSend("📐 <b>RANGO DE LONDRES FIJADO</b>\n" +
+                  "----------------\n" +
+                  "Alto:     " + DoubleToString(rangeHigh, symDigits) + "\n" +
+                  "Bajo:     " + DoubleToString(rangeLow,  symDigits) + "\n" +
+                  "Amplitud: " + DoubleToString((rangeHigh-rangeLow)/pipSize,1) + " pips\n" +
+                  "NY Open:  " + IntegerToString(nyOpenH) + ":00 broker");
+         }
+         else if(TimeCurrent() - ultimoAvisoRango > 300)
+         {
+            Print("AVISO: no se pudo calcular el rango de Londres (historial M1 no disponible). Reintentando...");
+            ultimoAvisoRango = TimeCurrent();
          }
       }
-      if(dt.min != lastPanelMin) { PanelUpdate(); lastPanelMin = dt.min; }
-      return;
    }
 
-   // Ventana NY
-   if(nowMinAdj >= nyOpen && nowMinAdj < cancelTime && rangeSet)
+   // Ventana NY — solo con el rango DEFINITIVO (v2.66: antes bastaba rangeSet)
+   if(nowMinAdj >= nyOpen && nowMinAdj < cancelTime && rangeFijado)
    {
       // Dibujar niveles al inicio de NY — una sola vez por dia
       if(!nivelesNYDibujados && NivelesVisible)
@@ -1655,23 +1677,15 @@ void LanzarBala(int idx)
 
 //+------------------------------------------------------------------+
 //| ACTUALIZA EL RANGO DE LONDRES (filtrado por dia actual)          |
+//| v2.66: copia las velas M1 por RANGO DE TIEMPO (antes 600 velas   |
+//| fijas, insuficientes si el EA arranca tarde) y usa solo velas    |
+//| CERRADAS (antes se descartaba la mas antigua y se incluia la que |
+//| estaba en formacion). Devuelve true si el rango es valido.       |
 //+------------------------------------------------------------------+
-void UpdateRange(int startMinutes, int endMinutes)
+bool UpdateRange(int startMinutes, int endMinutes)
 {
-   MqlRates rates[];
-   int bars = CopyRates(_Symbol, PERIOD_M1, 0, 600, rates);
-   if(bars <= 0) return;
-
-   double high = 0, low = DBL_MAX;
-   bool   found = false;
-
-   // Calcular inicio del dia actual en segundos (medianoche broker time)
-   // Usando aritmetica directa: mas robusto que StringToTime(TimeToString())
-   // que puede variar segun configuracion regional del broker
-   datetime ahora     = TimeCurrent();
-   datetime inicioDia = ahora - (ahora % 86400); // Truncar a medianoche UTC
-
-   // Ajuste: si el broker no esta en UTC, recalcular con la hora local
+   // Medianoche del dia actual en hora del broker (aritmetica directa)
+   datetime ahora = TimeCurrent();
    MqlDateTime dtAhora;
    TimeToStruct(ahora, dtAhora);
    datetime inicioDiaBroker = ahora
@@ -1679,31 +1693,35 @@ void UpdateRange(int startMinutes, int endMinutes)
                               - dtAhora.min    * 60
                               - dtAhora.sec;
 
-   for(int i = bars - 1; i >= 0; i--)
+   datetime tDesde = inicioDiaBroker + startMinutes * 60;
+   datetime tHasta = inicioDiaBroker + endMinutes   * 60; // apertura de la ultima vela de Londres
+
+   MqlRates rates[];
+   int bars = CopyRates(_Symbol, PERIOD_M1, tDesde, tHasta, rates);
+   if(bars <= 0) return false;
+
+   double high  = 0, low = DBL_MAX;
+   bool   found = false;
+
+   for(int i = 0; i < bars; i++)
    {
-      // Filtro 1: Solo barras del dia actual (>= medianoche broker time)
-      if(rates[i].time < inicioDiaBroker) continue;
-
-      // Filtro 2: Solo barras dentro de la ventana horaria de Londres
-      MqlDateTime rdt;
-      TimeToStruct(rates[i].time, rdt);
-      int barMin = rdt.hour * 60 + rdt.min;
-      if(barMin < startMinutes || barMin > endMinutes) continue;
-
-      // Filtro 3: Descartar barra actual incompleta (puede estar formandose)
-      if(rates[i].time == rates[0].time) continue;
+      if(rates[i].time < tDesde || rates[i].time > tHasta) continue;
+      // Solo velas CERRADAS: una vela M1 abierta en T termina en T+60
+      if(rates[i].time + 60 > ahora) continue;
 
       if(rates[i].high > high) high = rates[i].high;
       if(rates[i].low  < low)  low  = rates[i].low;
       found = true;
    }
 
-   if(found && high > 0 && low < DBL_MAX)
+   if(found && high > 0 && low < DBL_MAX && high > low)
    {
       rangeHigh = high;
       rangeLow  = low;
       rangeSet  = true;
+      return true;
    }
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -2429,6 +2447,7 @@ void ResetDaily()
    rangeLow                = 0;
    rangeSet                = false;
    rangeFijado             = false;
+   rangoEnVivo             = false;
    RangoEliminar();
    NivelesEliminarTodo();
    lastRangeMin            = -1;
@@ -4285,6 +4304,10 @@ void OnChartEvent(const int id, const long& lparam,
 //    - Nuevo input ModoDSTBroker (AUTO/EUROPA/EEUU/NINGUNO). AUTO detecta el
 //      offset real del servidor en vivo; en el tester aplica la regla europea
 //    - Nuevo input CierreViernesBroker (antes 22:00 fijo en el codigo)
+//    - Rango de Londres: velas M1 copiadas por rango de tiempo y solo CERRADAS;
+//      se fija en el primer tick tras la sesion (incluye la ultima vela completa)
+//      y se reintenta si el historial no esta disponible. La ventana NY exige
+//      el rango definitivo (rangeFijado)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
