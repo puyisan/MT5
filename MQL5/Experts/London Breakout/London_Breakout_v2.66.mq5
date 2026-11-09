@@ -225,6 +225,7 @@ bool   reinicioTemporal  = false; // true = reinicio por cambio temporalidad/par
 bool   botPausado        = false; // true = no lanza nuevas balas
 bool   precioFueraRango  = false; // true = precio salio del rango, esperar reingreso
 bool   panelMinimizado   = false; // true = panel colapsado a solo titulo
+int    opuestaAlertadaBala = -1;  // bala (1-8) con alerta de "ambas direcciones" ya enviada
 
 // Flags de festivo — calculados una vez al dia en RecalcHours
 bool   esFestivoHoyUS   = false;
@@ -725,6 +726,15 @@ int OnInit()
 {
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(30);
+
+   // v2.66: la logica de 2 entradas (E1/E2) con SL/TP propios exige cuenta HEDGING.
+   // En netting E1 y E2 se fusionan en una sola posicion con un unico SL/TP.
+   if(AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+   {
+      Print("ERROR: London_Breakout requiere una cuenta HEDGING. ",
+            "Esta cuenta es NETTING/EXCHANGE: el EA no se iniciara.");
+      return INIT_FAILED;
+   }
 
    symDigits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
@@ -1598,6 +1608,27 @@ void ManageCheckpointsBala(int idx)
    string tagE1_sel  = tag + "_SEL_E1";
    string tagE2_sel  = tag + "_SEL_E2";
 
+   // v2.66: si la direccion aun no se conoce (p.ej. tras un reinicio), tomar la
+   // de la PRIMERA posicion abierta de la bala (por hora de apertura)
+   if(balas[idx].direction == 0)
+   {
+      ulong tPrimera = ULONG_MAX;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         if(!posInfo.SelectByIndex(i)) continue;
+         if(posInfo.Magic()  != MagicNumber) continue;
+         if(posInfo.Symbol() != _Symbol)     continue;
+         if(StringFind(posInfo.Comment(), tag) < 0) continue;
+         if(posInfo.TimeMsc() < tPrimera)
+         {
+            tPrimera = posInfo.TimeMsc();
+            balas[idx].direction = (posInfo.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
+         }
+      }
+   }
+
+   bool hayOpuesta = false; // posiciones de la bala en la direccion contraria (OCO fallido)
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
@@ -1606,6 +1637,15 @@ void ManageCheckpointsBala(int idx)
 
       string cmt = posInfo.Comment();
       if(StringFind(cmt, tag) < 0) continue;
+
+      // Ignorar (y avisar) posiciones de la direccion contraria: no se mezclan
+      // con E1/E2 de la direccion activa. Conservan su propio SL/TP en el broker.
+      int dirPos = (posInfo.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
+      if(balas[idx].direction != 0 && dirPos != balas[idx].direction)
+      {
+         hayOpuesta = true;
+         continue;
+      }
 
       double openPrice = posInfo.PriceOpen();
       double curPrice  = (posInfo.PositionType() == POSITION_TYPE_BUY)
@@ -1623,10 +1663,28 @@ void ManageCheckpointsBala(int idx)
       if(esE2) { t2 = posInfo.Ticket(); profit2Pips = pips; pos2Active = true; }
    }
 
+   // v2.66: red de seguridad del OCO. Si OnTradeTransaction no llego a cancelar
+   // las stops opuestas (reconexion, reinicio), se cancelan aqui en cada tick.
+   if(balas[idx].direction != 0)
+      CancelOrdenesOpuestas(TradeComment + tag, balas[idx].direction);
+
+   if(hayOpuesta && opuestaAlertadaBala != idx + 1)
+   {
+      Print("BALA ", idx+1, " | ALERTA: hay posiciones abiertas en AMBAS direcciones. ",
+            "Solo se gestiona la direccion ", balas[idx].direction == 1 ? "BUY" : "SELL",
+            "; la contraria queda con su SL/TP del broker.");
+      TelegramSend("⚠️ <b>BALA " + IntegerToString(idx+1) + " — AMBAS DIRECCIONES ABIERTAS</b>\n" +
+         "----------------\n" +
+         "El OCO no cancelo a tiempo las ordenes opuestas.\n" +
+         "Se gestiona solo " + (balas[idx].direction == 1 ? "BUY" : "SELL") +
+         "; revisa la posicion contraria.");
+      opuestaAlertadaBala = idx + 1;
+   }
+
    // Bala terminada: ninguna posicion activa
    // IMPORTANTE: verificar tambien que no haya ordenes pendientes activas
    // Si hay ordenes pendientes = bala lanzada pero aun no activada, NO ha terminado
-   if(!pos1Active && !pos2Active)
+   if(!pos1Active && !pos2Active && !hayOpuesta)
    {
       // Verificar si hay ordenes pendientes de esta bala aun activas
       bool hayOrdenesPendientes = false;
@@ -2245,6 +2303,7 @@ void ResetDaily()
    balasConSP              = 0;
    limiteDiarioAlertado    = false;
    tpDiarioAlcanzado       = false;
+   opuestaAlertadaBala     = -1;
    balanceInicioDia        = AccountInfoDouble(ACCOUNT_BALANCE);
    velasConfirmadas        = 0;
    ultimaVelaContada       = 0;
@@ -4061,6 +4120,10 @@ void OnChartEvent(const int id, const long& lparam,
 //    - Eliminado #property strict (directiva de MQL4)
 //    - ManageCheckpointsBala se ejecuta en todo momento, no solo en la ventana
 //      NY: las posiciones abiertas tras cancelTime siguen con BE/SP/trailing
+//    - OnInit rechaza cuentas NETTING (INIT_FAILED): E1/E2 exigen HEDGING
+//    - OCO con red de seguridad: ManageCheckpointsBala cancela en cada tick las
+//      stops opuestas si OnTradeTransaction no lo hizo; si llegan a abrirse
+//      ambas direcciones se gestiona solo la primera y se avisa por Telegram
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
