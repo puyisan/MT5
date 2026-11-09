@@ -21,9 +21,10 @@ input double MaxDailyLossPct   = 2.0;  // Limite maximo de perdida diaria (% bal
 input double MaxDailyProfitPct = 3.0;  // Limite maximo de ganancia diaria (% balance)
                                         // 0 = desactivado (sin limite de ganancia)
 input double LoteMinBroker     = 0.01; // Lote minimo permitido por el broker
-input double ValorPuntoPorLote = 1.0;  // Valor en USD de 1 punto de precio por lote
-                                        // Este es el parametro MAS IMPORTANTE para el
-                                        // calculo correcto de lotes.
+input double ValorPuntoPorLote = 1.0;  // [Respaldo] Valor en USD de 1 pip por lote
+                                        // v2.66: el lote se calcula con OrderCalcProfit
+                                        // (valor real del simbolo). Este parametro solo
+                                        // se usa si OrderCalcProfit falla.
                                         //
                                         // Como calcularlo: abre 1 lote manualmente,
                                         // mueve el precio 1 punto y observa el P&L.
@@ -810,7 +811,9 @@ int OnInit()
    symMinLot      = MathMax(LoteMinBroker, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
    symMaxLot      = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    symLotStep     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   if(symLotStep <= 0 || symLotStep > LoteMinBroker) symLotStep = LoteMinBroker;
+   // v2.66: usar SIEMPRE el paso del broker (antes se forzaba a LoteMinBroker,
+   // lo que generaba volumenes invalidos con paso 0.1)
+   if(symLotStep <= 0) symLotStep = 0.01;
    for(int i = 0; i < 8; i++)
    {
       balas[i].id        = i + 1;
@@ -936,10 +939,10 @@ int OnInit()
    Print(" TickSize           : ", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE));
    Print(" LoteMinimo         : ", SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN),
          " (broker) | ", DoubleToString(LoteMinBroker,2), " (parametro)");
-   Print(" ValorPuntoPorLote  : $", DoubleToString(ValorPuntoPorLote,2), " por pip por lote");
+   Print(" ValorPuntoPorLote  : $", DoubleToString(ValorPuntoPorLote,2), " por pip por lote (solo respaldo)");
    double slEjemplo  = StopLossPips * pipSize;
    double lotEjemplo = CalculateLots(slEjemplo, RiskPerBala / 2.0);
-   double riesgoReal = StopLossPips * ValorPuntoPorLote * lotEjemplo;
+   double riesgoReal = PerdidaPorLote(slEjemplo) * lotEjemplo;
    Print(" Lote ejemplo (", DoubleToString(RiskPerBala/2,1), "% / SL=", StopLossPips, "p): ",
          DoubleToString(lotEjemplo,2), " lotes | Riesgo real: $", DoubleToString(riesgoReal,2));
    Print(" Trailing CP3       : ", UseTrailingCP3 ? "SI" : "NO");
@@ -1465,7 +1468,16 @@ void LanzarBala(int idx)
    }
 
    double lots = CalculateLots(slDist, halfRisk);
-   if(lots <= 0) { Print("Error calculando lote. Bala ", idx+1); return; }
+   if(lots <= 0)
+   {
+      static datetime ultimoAvisoLote = 0;
+      if(TimeCurrent() - ultimoAvisoLote > 300)
+      {
+         Print("Lote no valido (0): bala ", idx+1, " no lanzada. Revisa riesgo, SL y lote minimo.");
+         ultimoAvisoLote = TimeCurrent();
+      }
+      return;
+   }
 
    // Validar spread — si es mayor que el SL la orden sera rechazada
    double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2218,37 +2230,82 @@ void RemoveTakeProfit(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
+//| PERDIDA EN DIVISA DE LA CUENTA DE 1 LOTE CON UN SL DADO (v2.66)  |
+//| Usa OrderCalcProfit (valor real del simbolo segun el terminal).  |
+//| Respaldo: ValorPuntoPorLote si OrderCalcProfit no esta disponible|
+//+------------------------------------------------------------------+
+double PerdidaPorLote(double slDistance)
+{
+   if(slDistance <= 0) return 0;
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double pnl   = 0;
+   if(price > 0 &&
+      OrderCalcProfit(ORDER_TYPE_BUY, _Symbol, 1.0, price, price - slDistance, pnl) &&
+      pnl < 0)
+      return -pnl;
+
+   // Respaldo manual: valor de 1 pip por lote introducido por el usuario
+   if(ValorPuntoPorLote > 0 && pipSize > 0)
+   {
+      static datetime ultimoAvisoRespaldo = 0;
+      if(TimeCurrent() - ultimoAvisoRespaldo > 3600)
+      {
+         Print("[LOTES] OrderCalcProfit no disponible (error ", GetLastError(),
+               ") — usando ValorPuntoPorLote como respaldo.");
+         ultimoAvisoRespaldo = TimeCurrent();
+      }
+      return (slDistance / pipSize) * ValorPuntoPorLote;
+   }
+   return 0;
+}
+
+// Digitos decimales del volumen segun el paso de lote del broker
+int VolumenDigitos()
+{
+   if(symLotStep <= 0) return 2;
+   return (int)MathMax(0, MathCeil(-MathLog10(symLotStep) - 1e-9));
+}
+
+//+------------------------------------------------------------------+
 //| CALCULAR LOTES POR % DE RIESGO                                   |
-//| Usa LoteMinBroker como unidad base configurable por el usuario   |
+//| v2.66: la perdida por lote la calcula el terminal; si el lote    |
+//| resultante es menor que el minimo devuelve 0 (no opera) en vez   |
+//| de subirlo al minimo y exceder el riesgo.                        |
 //+------------------------------------------------------------------+
 double CalculateLots(double slDistance, double riskPct)
 {
    double balance    = AccountInfoDouble(ACCOUNT_BALANCE);
    double riskAmount = balance * riskPct / 100.0;
+   double lossPerLot = PerdidaPorLote(slDistance);
 
-   if(riskAmount <= 0 || slDistance <= 0 || ValorPuntoPorLote <= 0) return symMinLot;
+   if(riskAmount <= 0 || slDistance <= 0 || lossPerLot <= 0 || symLotStep <= 0) return 0;
 
-   // Formula: Lotes = Riesgo_USD / (SL_en_pips × ValorPuntoPorLote)
-   // ValorPuntoPorLote = valor USD de 1 pip por lote
-   // slDistance esta en unidades de precio → convertir a pips
-   double slPips   = slDistance / pipSize; // SL en pips
-   double lotsRaw  = riskAmount / (slPips * ValorPuntoPorLote);
-
-   if(lotsRaw <= 0) return symMinLot;
-
-   double lots = MathFloor(lotsRaw / symLotStep) * symLotStep;
-   lots = NormalizeDouble(MathMax(symMinLot, MathMin(symMaxLot, lots)), 2);
+   double lotsRaw = riskAmount / lossPerLot;
+   double lots    = MathFloor(lotsRaw / symLotStep + 1e-9) * symLotStep;
+   lots = NormalizeDouble(MathMin(symMaxLot, lots), VolumenDigitos());
 
    static datetime ultimoLog = 0;
    if(TimeCurrent() - ultimoLog > 60)
    {
       Print("[LOTES] Bal:$", DoubleToString(balance,2),
             " Riesgo:$", DoubleToString(riskAmount,2),
-            " SL:", DoubleToString(slPips,1), "pips",
-            " ValPip:$", DoubleToString(ValorPuntoPorLote,2),
-            " → Lotes:", DoubleToString(lots,2),
-            " RiesgoReal:$", DoubleToString(slPips * ValorPuntoPorLote * lots, 2));
+            " SL:", DoubleToString(slDistance / pipSize,1), "pips",
+            " Perdida/lote:$", DoubleToString(lossPerLot,2),
+            " → Lotes:", DoubleToString(lots, VolumenDigitos()),
+            " RiesgoReal:$", DoubleToString(lossPerLot * lots, 2));
       ultimoLog = TimeCurrent();
+   }
+
+   if(lots < symMinLot)
+   {
+      static datetime ultimoAvisoMin = 0;
+      if(TimeCurrent() - ultimoAvisoMin > 300)
+      {
+         Print("[LOTES] Lote calculado (", DoubleToString(lotsRaw, 4), ") menor que el minimo (",
+               DoubleToString(symMinLot, VolumenDigitos()), "). No se opera: el minimo superaria el riesgo.");
+         ultimoAvisoMin = TimeCurrent();
+      }
+      return 0;
    }
 
    return lots;
@@ -4172,6 +4229,9 @@ void OnChartEvent(const int id, const long& lparam,
 //      clasifican comparando precio de salida y de entrada (con tolerancia)
 //    - RecuperarEstadoDesdHistorial reescrita: balaActual = bala mas alta vista
 //      hoy; CP1/CP3 inferidos del SL actual con signo (antes MathAbs)
+//    - Lotes: perdida por lote con OrderCalcProfit (ValorPuntoPorLote queda como
+//      respaldo); paso de lote del broker; si el lote < minimo no se opera
+//      (antes se subia al minimo y se excedia el riesgo)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
