@@ -86,7 +86,8 @@ input bool   TradeTuesday      = true;
 input bool   TradeWednesday    = true;
 input bool   TradeThursday     = true;
 input bool   TradeFriday       = true;
-input int    VentanaViernesPips = 3;   // Horas de ventana NY los viernes
+input int    VentanaViernesPips = 3;   // HORAS de ventana NY los viernes (0 = igual que otros dias)
+                                        // (el nombre se conserva por compatibilidad con los .set)
 input bool   FiltrarFestivosUS = true; // No operar en festivos de EE.UU.
 input bool   FiltrarFestivosUK = true; // No operar en festivos de Reino Unido (Bank Holidays)
 
@@ -121,8 +122,7 @@ input int    GMT_Londres_Manual= 0;     // [Manual] GMT actual de Londres (0=GMT
 input int    GMT_NY_Manual     = -5;    // [Manual] GMT actual de NY (-5=EST, -4=EDT)
 // --- Horario de operacion (en GMT, el bot convierte al broker) ---
 input int    GMT_LondresAbre   = 8;     // Hora GMT apertura Londres (normalmente 8)
-input int    GMT_LondresCierra = 16;    // Hora GMT cierre ventana Londres/inicio NY
-                                         // (normalmente 16 = 1 min antes de NY open)
+// (v2.66: eliminado GMT_LondresCierra, no se usaba: Londres termina 1 min antes de GMT_NYAbre)
 input int    GMT_NYAbre        = 14;    // Hora GMT apertura NY (09:00 NY = 14:00 GMT)
 input int    GMT_VentanaCierra = 18;    // Hora GMT cierre ventana de operacion (NY+4h)
 input int    GMT_NYCierra      = 21;    // Hora GMT cierre mercado NY / reset diario
@@ -422,11 +422,6 @@ int GMTtoBroker(int gmtHour)
    return h;
 }
 
-// Detectar offset del broker (para compatibilidad con codigo existente)
-int DetectBrokerGMTOffset()
-{
-   return GetGMTBroker();
-}
 
 void RecalcHours()
 {
@@ -875,6 +870,10 @@ int GetBalasDisponibles()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   // v2.66: dia del ultimo tick procesado. Es -1 en una carga nueva; en cambios
+   // de grafico o de parametros MT5 conserva las variables globales.
+   int diaPrevio = currentDay;
+
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(30);
    // v2.66: modo de llenado segun el simbolo (CTrade usa FOK por defecto y
@@ -932,6 +931,21 @@ int OnInit()
    TimeToStruct(TimeCurrent(), dtInit);
    // Dia operativo: desde la medianoche broker (no hay operativa entre el reset y medianoche)
    inicioDiaOperativo = TimeCurrent() - dtInit.hour * 3600 - dtInit.min * 60 - dtInit.sec;
+
+   // Si el EA se reinicializa en un dia distinto al ultimo procesado (variables
+   // globales conservadas de un dia anterior sin reset), limpiar el estado ANTES
+   // de reconstruir el rango. v2.66: antes currentDay se asignaba justo antes de
+   // compararlo y la comprobacion nunca se cumplia.
+   if(diaPrevio != -1 && diaPrevio != dtInit.day)
+   {
+      if(!resetEjecutado)
+      {
+         Print("OnInit: nuevo dia detectado (", diaPrevio, " → ", dtInit.day, ") sin reset previo — ejecutando reset diario");
+         ResetDaily();
+         inicioDiaOperativo = TimeCurrent() - dtInit.hour * 3600 - dtInit.min * 60 - dtInit.sec;
+      }
+      resetEjecutado = false; // nuevo dia: el reset de cierre de HOY sigue pendiente
+   }
    currentDay = dtInit.day;
 
    // Si el EA arranca despues de la ventana de Londres,
@@ -955,20 +969,6 @@ int OnInit()
       else
          Print(" ADVERTENCIA: No se pudo reconstruir el rango de Londres. Se reintentara en OnTick.");
    }
-
-   // Si el EA arranca en un dia diferente al ultimo registrado (ej. lunes tras
-   // fin de semana donde el reset del viernes no se ejecuto por falta de ticks),
-   // ejecutar ResetDaily() antes de recuperar el estado para que el nuevo dia
-   // arranque con contadores limpios.
-   MqlDateTime dtOnInit;
-   TimeToStruct(TimeCurrent(), dtOnInit);
-   if(currentDay != 0 && dtOnInit.day != currentDay)
-   {
-      Print("OnInit: nuevo dia detectado (", currentDay, " → ", dtOnInit.day, ") — ejecutando reset diario");
-      ResetDaily();
-      resetEjecutado = true;
-   }
-   currentDay = dtOnInit.day;
 
    // Recuperar estado si el EA se reinicio en mitad del dia
    RecuperarEstadoDesdHistorial();
@@ -1160,6 +1160,17 @@ void OnTick()
    // Cambio de dia del calendario: recalcular horas DST y habilitar nuevo reset
    if(dt.day != currentDay)
    {
+      // v2.66: si el reset de cierre del dia anterior no llego a ejecutarse (sin
+      // ticks despues de closeTime, p.ej. un viernes), hacerlo ahora. Si no, el
+      // nuevo dia arrancaria con el rango y las balas del anterior.
+      if(currentDay != -1 && !resetEjecutado)
+      {
+         Print("Nuevo dia sin reset del anterior — cerrando posiciones y ejecutando reset diario.");
+         CloseAllPositions();
+         ResetDaily();
+         // Si alguna posicion no se pudo cerrar, volver a gestionarla
+         if(HayOrdenesOPosicionesActivas()) RecuperarEstadoDesdHistorial();
+      }
       RecalcHours();
       resetEjecutado = false; // habilitar reset para el nuevo dia
       currentDay     = dt.day;
@@ -1171,9 +1182,10 @@ void OnTick()
    int cancelTime  = cancelH      * 60;
    int closeTime   = closeAllH    * 60;
 
-   // Los viernes reducir la ventana NY a VentanaViernesPips horas (default 3h)
-   // para evitar rupturas falsas en cierre de semana
-   if(dt.day_of_week == 5 && VentanaViernesPips < 4)
+   // Los viernes la ventana NY dura VentanaViernesPips horas (default 3h)
+   // para evitar rupturas falsas en cierre de semana. v2.66: sin el limite
+   // oculto (antes valores >= 4 se ignoraban sin aviso)
+   if(dt.day_of_week == 5 && VentanaViernesPips > 0)
       cancelTime = nyOpen + VentanaViernesPips * 60;
 
    // Los viernes adelantar closeTime (CierreViernesBroker, por defecto 22:00 broker)
@@ -2309,14 +2321,6 @@ string DetectarCierreEntrada(int idx, int entrada)
    return "";
 }
 
-// Mantener compatibilidad con codigo existente
-bool DetectarSLEnBala(int idx)
-{
-   string r1 = DetectarCierreEntrada(idx, 1);
-   string r2 = DetectarCierreEntrada(idx, 2);
-   // Es perdida si alguna entrada cerro en SL real
-   return (r1 == "SL" || r2 == "SL");
-}
 
 // Wrapper que retorna true si el BE fue aplicado exitosamente (o ya estaba aplicado)
 bool MoveToBreakEvenOk(ulong ticket)
@@ -2348,51 +2352,6 @@ bool MoveToBreakEvenOk(ulong ticket)
    return ok;
 }
 
-//+------------------------------------------------------------------+
-//| MOVER SL A BREAK EVEN                                            |
-//+------------------------------------------------------------------+
-void MoveToBreakEven(ulong ticket)
-{
-   if(!posInfo.SelectByTicket(ticket)) return;
-   double openPrice = posInfo.PriceOpen();
-   double newSL     = NormalizeDouble(openPrice, symDigits);
-   double currentSL = posInfo.StopLoss();
-
-   bool isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
-
-   // Para BUY: mover si newSL es mayor que el SL actual, o si no hay SL (currentSL==0)
-   // Para SELL: mover si newSL es menor que el SL actual, o si no hay SL (currentSL==0)
-   bool shouldMove = (isBuy  && (currentSL == 0 || newSL > currentSL)) ||
-                     (!isBuy && (currentSL == 0 || newSL < currentSL));
-
-   if(!shouldMove) return;
-
-   // Validar distancia minima al precio actual (stops level del broker)
-   long   stopsLvl  = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist   = stopsLvl * _Point;
-   double curPrice  = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
-                             : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double distSL    = MathAbs(curPrice - newSL);
-
-   if(stopsLvl > 0 && distSL < minDist)
-   {
-      // El precio ya paso el BE — ajustar newSL al minimo permitido
-      // para que el SL quede lo mas cerca posible al openPrice sin rechazar
-      Print("BE AVISO  | ticket #", ticket,
-            " | Dist SL (", DoubleToString(distSL/_Point,0),
-            " pts) < stops level (", stopsLvl, " pts). BE diferido.");
-      // No marcar cp1Done aqui — se reintentara en el proximo tick
-      return;
-   }
-
-   bool ok = trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
-   if(ok) Print("BE activado | ticket #", ticket, " | SL → ", DoubleToString(newSL, symDigits),
-                " | tipo: ", isBuy ? "BUY" : "SELL");
-   else   Print("BE ERROR    | ticket #", ticket, " | error: ", GetLastError(),
-                " | tipo: ", isBuy ? "BUY" : "SELL",
-                " | newSL: ", DoubleToString(newSL, symDigits),
-                " | curPrice: ", DoubleToString(curPrice, symDigits));
-}
 
 //+------------------------------------------------------------------+
 //| MOVER SL A NIVEL DE BENEFICIO                                    |
@@ -3513,7 +3472,7 @@ void VLinDisbujar()
 
    // Los viernes usar la ventana reducida igual que en OnTick
    int cancelHEfectivo = cancelH;
-   if(dtA.day_of_week == 5 && VentanaViernesPips < 4)
+   if(dtA.day_of_week == 5 && VentanaViernesPips > 0)
       cancelHEfectivo = nyOpenH + VentanaViernesPips;
 
    datetime tCancel = inicioDia + cancelHEfectivo * 3600;
@@ -3915,7 +3874,7 @@ void PanelUpdate()
    int cl  = closeAllH*60;
 
    // Los viernes ajustar cancelTime igual que en OnTick
-   if(dt.day_of_week == 5 && VentanaViernesPips < 4)
+   if(dt.day_of_week == 5 && VentanaViernesPips > 0)
       ct = ny + VentanaViernesPips * 60;
    // Los viernes closeTime = CierreViernesBroker (si esta activo)
    if(dt.day_of_week == 5 && CierreViernesBroker >= 0)
@@ -4617,6 +4576,13 @@ void OnChartEvent(const int id, const long& lparam,
 //    - Festivos: Viernes Santo tambien en el filtro US (la NYSE cierra);
 //      Black Friday calculado sobre la fecha evaluada (fallaba en el aviso de
 //      "festivo manana"). Calculo de Pascua compartido
+//    - Cambio de dia: si el reset del dia anterior no se ejecuto (sin ticks
+//      tras closeTime) se ejecuta al empezar el nuevo dia. La deteccion de
+//      cambio de dia en OnInit (v2.62) por fin funciona y deja pendiente el
+//      reset de cierre de hoy (antes lo marcaba como hecho)
+//    - VentanaViernesPips (horas) acepta cualquier valor > 0
+//    - Eliminado codigo sin uso: GMT_LondresCierra, DetectBrokerGMTOffset,
+//      DetectarSLEnBala, MoveToBreakEven
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
