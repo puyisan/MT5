@@ -1048,6 +1048,10 @@ int OnInit()
    Print(" Balas lanzadas hoy : ", balaActual, " | TP:", balasConTP, " SP:", balasConSP, " BE:", balasConBE, " SL:", balasConSL);
    Print("============================================");
 
+   // v2.66: temporizador para vaciar la cola de Telegram fuera de OnTick
+   if(!EventSetTimer(1))
+      Print("AVISO: no se pudo crear el temporizador (Telegram no se enviara). Error ", GetLastError());
+
    if(!reinicioTemporal)
       TelegramBotIniciado();
    reinicioTemporal = false;
@@ -1103,6 +1107,8 @@ void OnDeinit(const int reason)
                             reason == REASON_RECOMPILE   ||
                             reason == REASON_TEMPLATE);
 
+   EventKillTimer();
+
    // Solo eliminar panel y niveles siempre (se reconstruyen en OnInit)
    PanelDestroy();
    RangoEliminar();
@@ -1120,6 +1126,7 @@ void OnDeinit(const int reason)
    CSVGuardarDia();
    CancelPendingOrders();
    TelegramBotDetenido("Codigo " + IntegerToString(reason));
+   TelegramProcesarCola(10); // vaciar la cola antes de salir (sin OnTimer ya)
    Print("London_Breakout_v2.66 detenido. Razon: ", reason);
 }
 
@@ -3011,15 +3018,57 @@ void CancelOrdenesOpuestas(string tag, int dirActivada)
 //  → "Permitir solicitudes Web" → agregar: https://api.telegram.org
 //+------------------------------------------------------------------+
 
+// v2.66: los mensajes se ENCOLAN y se envian desde OnTimer (1 por segundo).
+// Antes WebRequest (sincrono, timeout 3 s) se ejecutaba dentro de OnTick y podia
+// bloquear el EA varios segundos justo al cerrar o gestionar una bala.
+#define TELEGRAM_COLA_MAX 50
+string colaTelegram[];
+
 void TelegramSend(string mensaje)
 {
    if(!TelegramEnabled) return;
+   // En el probador WebRequest no esta disponible: no encolar nada
+   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION)) return;
    if(TelegramToken == "TU_BOT_TOKEN" || TelegramChatID == "TU_CHAT_ID")
    {
-      Print("TELEGRAM: Configura TelegramToken y TelegramChatID en los parametros.");
+      static datetime ultimoAvisoConfig = 0;
+      if(TimeCurrent() - ultimoAvisoConfig > 3600)
+      {
+         Print("TELEGRAM: Configura TelegramToken y TelegramChatID en los parametros.");
+         ultimoAvisoConfig = TimeCurrent();
+      }
       return;
    }
 
+   int n = ArraySize(colaTelegram);
+   if(n >= TELEGRAM_COLA_MAX)
+   {
+      ArrayRemove(colaTelegram, 0, 1); // descartar el mas antiguo
+      n = ArraySize(colaTelegram);
+   }
+   ArrayResize(colaTelegram, n + 1);
+   colaTelegram[n] = mensaje;
+}
+
+// Enviar hasta maxMensajes de la cola (los mas antiguos primero)
+void TelegramProcesarCola(int maxMensajes)
+{
+   for(int k = 0; k < maxMensajes && ArraySize(colaTelegram) > 0; k++)
+   {
+      string msg = colaTelegram[0];
+      ArrayRemove(colaTelegram, 0, 1);
+      TelegramEnviarAhora(msg);
+   }
+}
+
+void OnTimer()
+{
+   TelegramProcesarCola(1);
+}
+
+// Envio sincrono via WebRequest — solo desde OnTimer / OnDeinit
+void TelegramEnviarAhora(string mensaje)
+{
    // Codificar mensaje para URL
    string msgEscaped = mensaje;
    StringReplace(msgEscaped, "%",  "%25"); // siempre primero
@@ -4427,6 +4476,8 @@ void OnChartEvent(const int id, const long& lparam,
 //      colocar las stops se comprueba la distancia a Ask/Bid (stops/freeze
 //      level): si no cabe se espera en vez de abortar la bala. Precios
 //      normalizados al tick size
+//    - Telegram: cola enviada desde OnTimer (1 msg/s) en vez de WebRequest
+//      sincrono dentro de OnTick; desactivado en el probador
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
