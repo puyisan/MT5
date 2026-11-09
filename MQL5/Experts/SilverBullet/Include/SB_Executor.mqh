@@ -25,9 +25,14 @@ private:
    //--- motivo de los últimos cierres hechos por el EA (para el registro CSV)
    ulong             m_whyTk[8];
    string            m_whyTxt[8];
+   double            m_whyPx[8];      // precio de mercado pedido al cerrar (bid compra / ask venta)
    int               m_whyPos;
-   void              NoteClose(const ulong tk,const string why)
-     { m_whyTk[m_whyPos]=tk; m_whyTxt[m_whyPos]=why; m_whyPos=(m_whyPos+1)%8; }
+   void              NoteClose(const ulong tk,const string why,const bool isBuy)
+     {
+      m_sym.RefreshRates();
+      m_whyTk[m_whyPos]=tk; m_whyTxt[m_whyPos]=why; m_whyPx[m_whyPos]=isBuy?m_sym.Bid():m_sym.Ask();
+      m_whyPos=(m_whyPos+1)%8;
+     }
 
    double            MinDist(void)
      {
@@ -46,7 +51,7 @@ private:
 
 public:
                      CExecutor(void) : m_magic(0),m_symbol(""),m_whyPos(0)
-     { for(int i=0;i<8;i++) { m_whyTk[i]=0; m_whyTxt[i]=""; } }
+     { for(int i=0;i<8;i++) { m_whyTk[i]=0; m_whyTxt[i]=""; m_whyPx[i]=0.0; } }
    bool              Init(const string symbol,const ulong magic,const int deviationPts);
    double            NormPrice(const double p);
    double            MarketPrice(const int dir);
@@ -59,6 +64,8 @@ public:
    int               CloseAll(const string reason);
    string            CloseReason(const ulong posTicket) const
      { for(int i=0;i<8;i++) if(m_whyTk[i]==posTicket) return m_whyTxt[i]; return ""; }
+   double            CloseRequestPrice(const ulong posTicket) const
+     { for(int i=0;i<8;i++) if(m_whyTk[i]==posTicket) return m_whyPx[i]; return 0.0; }
    void              Manage(const double beAtR,const double beOffsetPts,const int maxHoldSec);
   };
 
@@ -187,7 +194,7 @@ int CExecutor::CloseAll(const string reason)
       if(!m_pos.SelectByIndex(i) || !Mine(m_pos.Symbol(),m_pos.Magic())) continue;
       const ulong tk=m_pos.Ticket();
       ResetLastError();
-      NoteClose(tk,reason);
+      NoteClose(tk,reason,m_pos.PositionType()==POSITION_TYPE_BUY);
       if(!m_trade.PositionClose(tk)) { LogFail(StringFormat("PositionClose #%I64u (%s)",tk,reason)); continue; }
       const uint rc=m_trade.ResultRetcode();
       if(rc!=TRADE_RETCODE_DONE && rc!=TRADE_RETCODE_DONE_PARTIAL)
@@ -227,7 +234,7 @@ void CExecutor::Manage(const double beAtR,const double beOffsetPts,const int max
       if(maxHoldSec>0 && (long)(TimeCurrent()-m_pos.Time())>=maxHoldSec)
         {
          ResetLastError();
-         NoteClose(tk,"tiempo");
+         NoteClose(tk,"tiempo",m_pos.PositionType()==POSITION_TYPE_BUY);
          if(!m_trade.PositionClose(tk)) LogFail(StringFormat("PositionClose #%I64u (tiempo)",tk));
          else PrintFormat("Executor: posición #%I64u cerrada por tiempo máximo",tk);
          continue;

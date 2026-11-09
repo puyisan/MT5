@@ -8,7 +8,7 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.09"
+#property version   "1.10"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -584,7 +584,7 @@ int OnInit()
       const int dot=StringFind(jfile,".csv");
       jfile=(dot>0)?StringSubstr(jfile,0,dot)+"_backtest.csv":jfile+"_backtest";
      }
-   g_journal.Init(InpJournal && !optimizing,jfile,InpJournalCommon,tester,InpMagic,_Symbol,"1.09");
+   g_journal.Init(InpJournal && !optimizing,jfile,InpJournalCommon,tester,InpMagic,_Symbol,"1.10");
    if(g_journal.Enabled() && !optimizing)
       PrintFormat("Registro de operaciones: %s",g_journal.FullPath());
 
@@ -600,7 +600,7 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.09 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+   PrintFormat("SilverBullet v1.10 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
                _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    if(StringLen(AccountInfoString(ACCOUNT_CURRENCY))!=3)
@@ -657,7 +657,7 @@ void OnDeinit(const int reason)
 void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &request,const MqlTradeResult &result)
   {
    if(trans.type!=TRADE_TRANSACTION_DEAL_ADD || !g_journal.Enabled()) return;
-   g_journal.OnDeal(trans.deal,g_exec.CloseReason(trans.position));
+   g_journal.OnDeal(trans.deal,g_exec.CloseReason(trans.position),g_exec.CloseRequestPrice(trans.position));
   }
 
 //+------------------------------------------------------------------+

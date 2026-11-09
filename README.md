@@ -94,7 +94,7 @@ defecto den resultados parecidos. Si solo funcionan los valores actuales, la est
 `OnTester()` = PF (acotado a 10; sin pérdidas MT5 reporta PF 0) × √operaciones × (1 − DD%/100). Devuelve 0 con
 menos de `InpTesterMinTrades` (10) operaciones.
 
-### Registro de operaciones (v1.09)
+### Registro de operaciones (v1.09, v1.10)
 El EA escribe una línea por posición cerrada en `MQL5/Files/SilverBullet_operaciones.csv`
 (en el tester: `SilverBullet_operaciones_backtest.csv`, que se vacía en cada prueba; nunca en optimización).
 La ruta completa aparece al iniciar, en la pestaña *Expertos* (`Registro de operaciones: ...`).
@@ -104,6 +104,10 @@ salida_pedida, salida_precio, salida, usd, r, slip_entrada_pts, slip_salida_pts,
 - `salida`: `TP`, `SL`, `BE`, `tiempo`, `viernes`, `manual`, `stop out`.
 - `slip_*_pts`: diferencia en puntos entre el precio pedido y el ejecutado; **positivo = peor** de lo pedido.
 - `r`: resultado / distancia entre la entrada pedida y el SL inicial.
+- v1.10: en los cierres por tiempo y de viernes, `salida_pedida` es el precio de mercado al enviar el cierre.
+
+Panel de seguimiento: lee en directo desde Google Drive (Google Drive para escritorio sincroniza
+`MQL5/Files` y la carpeta `Files` del agente del tester) y empareja demo y backtest por fecha, ventana y dirección.
 
 En MT5 para Mac (Wine) la carpeta está en
 `~/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files/`

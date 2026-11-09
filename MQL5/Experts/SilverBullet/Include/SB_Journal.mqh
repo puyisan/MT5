@@ -49,6 +49,7 @@ private:
       return (StringLen(num)>0)?StringToDouble(num):0.0;
      }
    bool              WriteLine(const string line);
+   static string     Num1(const double x) { return DoubleToString((MathAbs(x)<0.05)?0.0:x,1); }   // sin "-0.0" 
 
 public:
                      CTradeJournal(void) : m_on(false),m_file(""),m_flags(0),m_magic(0),m_symbol(""),m_version("") {}
@@ -56,7 +57,7 @@ public:
                           const ulong magic,const string symbol,const string version);
    bool              Enabled(void) const { return m_on; }
    string            FullPath(void) const;
-   void              OnDeal(const ulong deal,const string eaCloseReason);
+   void              OnDeal(const ulong deal,const string eaCloseReason,const double eaClosePrice);
   };
 
 //+------------------------------------------------------------------+
@@ -109,7 +110,7 @@ bool CTradeJournal::WriteLine(const string line)
 //+------------------------------------------------------------------+
 //| Llamar desde OnTradeTransaction con cada DEAL_ADD                |
 //+------------------------------------------------------------------+
-void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason)
+void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason,const double eaClosePrice)
   {
    if(!m_on || deal==0) return;
    if(!HistoryDealSelect(deal)) return;
@@ -172,6 +173,8 @@ void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason)
    double reqOut=PriceFromComment(cmtOut);
    if(reqOut<=0.0 && ordOut>0 && HistoryOrderSelect(ordOut))
       reqOut=HistoryOrderGetDouble(ordOut,ORDER_PRICE_OPEN);
+   if(reqOut<=0.0 && (ENUM_DEAL_REASON)reasonOut==DEAL_REASON_EXPERT)
+      reqOut=eaClosePrice;                                   // cierre por tiempo / viernes: precio al enviar
 
    //--- tipo de salida
    string exitType="otro";
@@ -190,8 +193,8 @@ void CTradeJournal::OnDeal(const ulong deal,const string eaCloseReason)
    //--- R y deslizamiento (positivo = peor de lo pedido)
    const double risk=(reqIn>0 && slIn>0)?MathAbs(reqIn-slIn):0.0;
    const string rStr=(risk>0)?DoubleToString(dir*(pxOut-pxIn)/risk,2):"";
-   const string slipIn =(reqIn>0 && pt>0)?DoubleToString(dir*(pxIn-reqIn)/pt,1):"";
-   const string slipOut=(reqOut>0 && pt>0)?DoubleToString(dir*(reqOut-pxOut)/pt,1):"";
+   const string slipIn =(reqIn>0 && pt>0)?Num1(dir*(pxIn-reqIn)/pt):"";
+   const string slipOut=(reqOut>0 && pt>0)?Num1(dir*(reqOut-pxOut)/pt):"";
 
    //--- contexto desde el comentario "SB 10-11NY EQH"
    string parts[];
