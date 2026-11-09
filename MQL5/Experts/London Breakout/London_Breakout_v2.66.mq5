@@ -1726,26 +1726,51 @@ void LanzarBala(int idx)
          trade.OrderDelete(ticket);
       }
 
-      // Activar confirmacion para reintentar en el proximo ciclo
-      if(UsarConfirmacion && VelasConfirmacion > 0)
+      // v2.66: si alguna orden se ejecuto antes de cancelarla, hay posiciones
+      // abiertas de esta bala. Antes la bala se abortaba igualmente y esas
+      // posiciones quedaban huerfanas (sin BE ni trailing) y bloqueaban nuevas balas.
+      bool hayPosicionAbierta = false;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
-         esperandoConfirmacion = true;
-         velasConfirmadas      = 0;
-         double precioActual   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         precioFueraRango      = (precioActual <= rangeLow || precioActual >= rangeHigh);
-         MqlRates velaActual[];
-         if(CopyRates(_Symbol, PERIOD_M1, 0, 1, velaActual) > 0)
-            ultimaVelaContada = velaActual[0].time;
-         else
-            ultimaVelaContada = TimeCurrent() - 60;
+         if(!posInfo.SelectByIndex(i)) continue;
+         if(posInfo.Magic()  != MagicNumber) continue;
+         if(posInfo.Symbol() != _Symbol)     continue;
+         if(StringFind(posInfo.Comment(), tag) < 0) continue;
+         hayPosicionAbierta = true;
+         break;
       }
 
-      TelegramSend("⚠️ <b>BALA " + IntegerToString(idx+1) + " ABORTADA</b>\n" +
+      if(!hayPosicionAbierta)
+      {
+         // Activar confirmacion para reintentar en el proximo ciclo
+         if(UsarConfirmacion && VelasConfirmacion > 0)
+         {
+            esperandoConfirmacion = true;
+            velasConfirmadas      = 0;
+            double precioActual   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            precioFueraRango      = (precioActual <= rangeLow || precioActual >= rangeHigh);
+            MqlRates velaActual[];
+            if(CopyRates(_Symbol, PERIOD_M1, 0, 1, velaActual) > 0)
+               ultimaVelaContada = velaActual[0].time;
+            else
+               ultimaVelaContada = TimeCurrent() - 60;
+         }
+
+         TelegramSend("⚠️ <b>BALA " + IntegerToString(idx+1) + " ABORTADA</b>\n" +
+            "----------------\n" +
+            "Error al colocar ordenes tras 3 intentos.\n" +
+            "Ordenes OK: " + IntegerToString(ordenesOk) + "/4\n" +
+            "Se reintentara en el proximo ciclo.");
+         return;
+      }
+
+      // Hay posiciones: la bala queda en curso y se gestiona con normalidad
+      Print("BALA ", idx+1, " | Una orden se ejecuto antes de cancelar: la bala queda EN CURSO",
+            " con las posiciones abiertas.");
+      TelegramSend("⚠️ <b>BALA " + IntegerToString(idx+1) + " INCOMPLETA</b>\n" +
          "----------------\n" +
-         "Error al colocar ordenes tras 3 intentos.\n" +
-         "Ordenes OK: " + IntegerToString(ordenesOk) + "/4\n" +
-         "Se reintentara en el proximo ciclo.");
-      return;
+         "Solo " + IntegerToString(ordenesOk) + "/4 ordenes colocadas, pero una ya se ejecuto.\n" +
+         "La bala sigue en curso con las posiciones abiertas.");
    }
 
    // Inicializar bala
@@ -4510,6 +4535,8 @@ void OnChartEvent(const int id, const long& lparam,
 //      comprueban lado del precio, stops level y freeze level
 //    - Confirmacion de reingreso: las N velas M1 cerradas MAS RECIENTES deben
 //      cerrar dentro del rango (antes valia cualquier racha antigua)
+//    - Bala con ordenes incompletas: si alguna ya se ejecuto, la bala se registra
+//      como en curso en vez de abortarse dejando la posicion huerfana
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
