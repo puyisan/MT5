@@ -13,9 +13,16 @@ El más grave: la identificación de cierres por comentario no funciona con SL/T
 
 ## Estado en v2.66
 
-Todas las correcciones están en `London_Breakout_v2.66.mq5` (la v2.65 se conserva sin cambios). Cada
-una va en su propio commit en `main`. **No se ha compilado ni probado en MetaEditor/MT5**: compila con F7
-y haz un backtest antes de usarla en demo.
+Las correcciones se hicieron en la v2.66 (cada una en su propio commit en `main`); la versión actual es
+`London_Breakout_v2.67.mq5` y la v2.65 se conserva sin cambios. La v2.66 **compila sin errores** en
+MetaEditor (build 6275) y pasó una prueba de funcionamiento en el probador (US30Roll, 02-03 a 10-04-2026,
+ticks reales): OCO, BE, paso de lote 0.1, horario con DST de EE. UU., Viernes Santo y Easter Monday
+funcionan como se espera.
+
+**v2.67 — hallazgo 18 (encontrado en ese backtest, presente desde v2.65):** tras el reset diario el código
+ponía `cierreNYHecho = true` justo después de que `ResetDaily()` lo dejara en `false`, así que al día
+siguiente las pendientes no se cancelaban al final de la ventana NY. Seguían vivas hasta el reset de
+cierre (23:00 broker) y se activaban fuera de la ventana: 8 de 103 balas en ese periodo. Corregido.
 
 | # | Hallazgo | Estado en v2.66 |
 |---|---|---|

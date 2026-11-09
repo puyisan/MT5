@@ -1,4 +1,4 @@
-;London Breakout v2.66 - backtest con los valores por defecto de v2.66
+;London Breakout v2.67 - backtest con los valores por defecto de v2.67
 ;Cambios sobre los valores por defecto: ModoDSTBroker=2 (EEUU: el broker cambia de hora con EE.UU., comprobado con la apertura NY en marzo), TelegramEnabled=false
 ;Probador: cuenta HEDGING | modelo "Cada tick basado en ticks reales" | simbolo US30 del broker
 ;ModoDSTBroker: 2=EEUU (este broker), 1=EUROPA, 0=AUTO (en el probador AUTO aplica EUROPA)

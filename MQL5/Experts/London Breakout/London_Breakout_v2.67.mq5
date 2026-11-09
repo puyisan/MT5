@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                    London_Breakout_v2.66.mq5                     |
+//|                    London_Breakout_v2.67.mq5                     |
 //|        Ruptura del Rango de Londres — US30 — Nueva York          |
 //|                     Copyright 2026, RRL Strategy                 |
 //+------------------------------------------------------------------+
 #property copyright "RRL Strategy"
-#property version   "2.66"
-#property description "London Breakout US30 — v2.66"
+#property version   "2.67"
+#property description "London Breakout US30 — v2.67"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1023,7 +1023,7 @@ int OnInit()
    }
 
    Print("============================================");
-   Print(" London_Breakout_v2.66 - SISTEMA DE BALAS");
+   Print(" London_Breakout_v2.67 - SISTEMA DE BALAS");
    Print("--------------------------------------------");
    Print(" Broker GMT offset  : GMT+", brokerOffsetHours,
          " | Londres: GMT+", GetGMTLondres(),
@@ -1130,7 +1130,7 @@ void OnDeinit(const int reason)
    if(esCambioTemporal)
    {
       reinicioTemporal = true;
-      Print("London_Breakout_v2.66 reiniciando (razon ", reason, ") — ordenes preservadas.");
+      Print("London_Breakout_v2.67 reiniciando (razon ", reason, ") — ordenes preservadas.");
       return;
    }
 
@@ -1140,7 +1140,7 @@ void OnDeinit(const int reason)
       TelegramBotDetenido("Terminal o grafico cerrado (codigo " + IntegerToString(reason) +
                           ") — ordenes y posiciones preservadas");
       TelegramProcesarCola(10);
-      Print("London_Breakout_v2.66 detenido por cierre del terminal/grafico (razon ", reason,
+      Print("London_Breakout_v2.67 detenido por cierre del terminal/grafico (razon ", reason,
             ") — ordenes preservadas.");
       return;
    }
@@ -1150,7 +1150,7 @@ void OnDeinit(const int reason)
    CancelPendingOrders();
    TelegramBotDetenido("Codigo " + IntegerToString(reason));
    TelegramProcesarCola(10); // vaciar la cola antes de salir (sin OnTimer ya)
-   Print("London_Breakout_v2.66 detenido. Razon: ", reason);
+   Print("London_Breakout_v2.67 detenido. Razon: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -1262,7 +1262,9 @@ void OnTick()
          }
          ResetDaily();
          resetEjecutado      = true;
-         cierreNYHecho       = true;
+         // v2.67: NO marcar cierreNYHecho aqui. ResetDaily() lo deja en false para el
+         // dia siguiente; ponerlo a true (como hasta v2.66) impedia cancelar las
+         // pendientes al terminar la ventana NY y podian ejecutarse hasta el cierre.
          inicioIntentoCierre = 0;
       }
       if(dt.min != lastPanelMin) { PanelUpdate(); lastPanelMin = dt.min; }
@@ -4536,6 +4538,13 @@ void OnChartEvent(const int id, const long& lparam,
 //    X  - Cambio mayor de arquitectura o estrategia
 //    Y  - Cambio operacional (logica, parametros, calculos)
 //    Z  - Cambio estetico (panel, colores, textos, comentarios)
+//
+//  v2.67 - Cancelacion de pendientes al final de la ventana NY
+//    - El reset diario dejaba cierreNYHecho=true para el dia siguiente, asi que
+//      CancelPendingOrders() no se ejecutaba en cancelTime: las ordenes de la
+//      ultima bala seguian vivas hasta el reset de cierre y se activaban fuera
+//      de la ventana (visto en el backtest del 02-03 al 10-04-2026). Fallo
+//      presente desde v2.65
 //
 //  v2.66 - Correcciones de la auditoria (ver AUDITORIA_v2.65.md)
 //    - Compila: eliminada la asignacion global sin tipo de festivoAlertado

@@ -1,7 +1,7 @@
-;London Breakout v2.66 - backtest con las ENTRADAS de v2.65, para comparar ambas versiones
-;Cambios sobre v2.66 por defecto: CompensarSpreadBuy=false, TrailingPasoPips=0, ModoDSTBroker=1 (EUROPA), TelegramEnabled=false
+;London Breakout v2.67 - backtest con las ENTRADAS de v2.65, para comparar ambas versiones
+;Cambios sobre v2.67 por defecto: CompensarSpreadBuy=false, TrailingPasoPips=0, ModoDSTBroker=1 (EUROPA), TelegramEnabled=false
 ;Los arreglos de rango, lotes, gestion tras la ventana, etc. siguen activos: no dara exactamente lo mismo que v2.65
-;ModoDSTBroker=1 a proposito: reproduce el horario (erroneo para este broker) de v2.65. El backtest bueno es LondonBreakout_v266_backtest.set
+;ModoDSTBroker=1 a proposito: reproduce el horario (erroneo para este broker) de v2.65. El backtest bueno es LondonBreakout_v267_backtest.set
 ;Probador: cuenta HEDGING | modelo "Cada tick basado en ticks reales" | simbolo US30 del broker
 ;ModoDSTBroker: 1=EUROPA (por defecto aqui), 2=EEUU si tu broker cambia de hora con EE.UU. (0=AUTO en el probador = EUROPA)
 ;PuntosPerPip=100 asume _Point=0.01 (1 pip = 1 punto del indice). Comprueba 'pipSize' en el diario al arrancar

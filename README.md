@@ -5,7 +5,9 @@
 Ruptura del rango de la sesión de Londres en US30 durante la apertura de Nueva York, con "balas" de dos
 entradas (E1 a TP1, E2 con BE, stop en beneficio y trailing) y presupuesto de pérdida diario.
 
-- `London_Breakout_v2.66.mq5`: versión actual, con las correcciones de la auditoría. Requiere cuenta **hedging**.
+- `London_Breakout_v2.67.mq5`: versión actual, con las correcciones de la auditoría (v2.66) y la cancelación de
+  pendientes al final de la ventana NY (v2.67). Requiere cuenta **hedging**. Presets del probador:
+  `MQL5/Profiles/Tester/LondonBreakout_v267_backtest.set` (el broker cambia de hora con EE. UU.) y `_como_v265.set`.
 - `London_Breakout_v2.65.mq5`: versión original, sin modificar (no compila tal cual: línea 221).
 - `AUDITORIA_v2.65.md`: hallazgos de la auditoría y cómo quedó cada uno en v2.66, incluidos los inputs nuevos
   y los cambios de comportamiento.
