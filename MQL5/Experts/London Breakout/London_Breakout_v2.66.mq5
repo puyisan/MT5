@@ -80,12 +80,26 @@ input int    MagicNumber       = 80082505;
 input string TradeComment      = "RRL_US30";
 
 input group "=== HORARIOS ==="
+// v2.66: regla de horario de verano del BROKER (solo con UsarDSTAutomatico=true)
+enum ENUM_DST_BROKER
+{
+   DST_BROKER_AUTO    = 0, // Auto: detectar offset en vivo (tester: regla Europa)
+   DST_BROKER_EUROPA  = 1, // Europa: +1h de ultimo domingo marzo a ultimo domingo octubre
+   DST_BROKER_EEUU    = 2, // EE.UU.: +1h de 2do domingo marzo a 1er domingo noviembre
+   DST_BROKER_NINGUNO = 3  // Sin cambio de hora (offset fijo = GMT_Broker_Base)
+};
 input bool   UsarDSTAutomatico = true;  // true  = calcula DST automaticamente
                                          //         solo necesitas GMT_Broker_Base
                                          // false = usa los GMT manuales definidos abajo
 input int    GMT_Broker_Base   = 2;     // Offset GMT base del broker SIN DST
                                          // Ej: broker Europa = 2 (invierno)
                                          //     broker UTC    = 0 (nunca cambia)
+input ENUM_DST_BROKER ModoDSTBroker = DST_BROKER_AUTO; // Regla DST del broker
+                                         // Muchos brokers GMT+2/+3 cambian con EE.UU.
+                                         // (17:00 NY = 00:00 servidor). En el tester
+                                         // elige EUROPA o EEUU segun tu broker.
+input int    CierreViernesBroker = 22;  // Hora BROKER de cierre/reset los viernes
+                                         // (-1 = usar el cierre normal GMT_NYCierra)
 // --- Solo si UsarDSTAutomatico = false ---
 input int    GMT_Broker_Manual = 2;     // [Manual] GMT actual del broker
 input int    GMT_Londres_Manual= 0;     // [Manual] GMT actual de Londres (0=GMT, 1=BST)
@@ -342,12 +356,43 @@ int GetGMTNY()
 // Brokers europeos: GMT_Broker_Base en invierno, +1 en verano (siguen DST europeo = BST)
 // Si UsarDSTAutomatico: GMT_Broker_Base + 1 si Londres esta en BST
 // Si manual: usar GMT_Broker_Manual
+// v2.66: detectar el offset real del servidor en cuenta real/demo.
+// TimeTradeServer() - TimeGMT() depende de que la zona horaria del PC sea correcta.
+bool DetectarOffsetBrokerEnVivo(int &offset)
+{
+   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION)) return false;
+   datetime srv = TimeTradeServer();
+   datetime gmt = TimeGMT();
+   if(srv <= 0 || gmt <= 0) return false;
+   double horas = (double)((long)srv - (long)gmt) / 3600.0;
+   int    h     = (int)MathRound(horas);
+   if(h < -12 || h > 14)          return false;
+   if(MathAbs(horas - h) > 0.25)  return false; // desfase no entero: reloj poco fiable
+   offset = h;
+   return true;
+}
+
 int GetGMTBroker()
 {
    if(!UsarDSTAutomatico) return GMT_Broker_Manual;
-   // La mayoria de brokers europeos siguen el DST de Europa (igual que Londres BST)
-   // En verano: GMT_Broker_Base + 1, en invierno: GMT_Broker_Base
-   return GMT_Broker_Base + (EsBST(TimeGMT()) ? 1 : 0);
+   datetime gmt = TimeGMT();
+   if(ModoDSTBroker == DST_BROKER_EEUU)    return GMT_Broker_Base + (EsEDT(gmt) ? 1 : 0);
+   if(ModoDSTBroker == DST_BROKER_NINGUNO) return GMT_Broker_Base;
+   if(ModoDSTBroker == DST_BROKER_AUTO)
+   {
+      int detectado = 0;
+      if(DetectarOffsetBrokerEnVivo(detectado))
+      {
+         int reglaEU = GMT_Broker_Base + (EsBST(gmt) ? 1 : 0);
+         if(detectado != reglaEU)
+            Print("[HORARIOS] Offset del servidor detectado GMT", detectado >= 0 ? "+" : "", detectado,
+                  " (la regla europea daria GMT+", reglaEU, "). Se usa el detectado.");
+         return detectado;
+      }
+      // Tester o deteccion fallida: regla europea (comportamiento de v2.65)
+   }
+   // DST_BROKER_EUROPA: la mayoria de brokers europeos siguen el DST de Europa (= BST)
+   return GMT_Broker_Base + (EsBST(gmt) ? 1 : 0);
 }
 
 // Convertir hora GMT a hora del broker
@@ -405,7 +450,7 @@ void RecalcHours()
    cancelH      = GMTtoBroker(gmtVentanaCierra);
    closeAllH    = GMTtoBroker(gmtNYCierra);
 
-   Print("[HORARIOS] Modo: ", UsarDSTAutomatico ? "AUTOMATICO" : "MANUAL",
+   Print("[HORARIOS] Modo: ", UsarDSTAutomatico ? "AUTOMATICO (" + EnumToString(ModoDSTBroker) + ")" : "MANUAL",
          " | GMT Broker:", brokerOffsetHours,
          " GMT Londres:", gmtLondres,
          " GMT NY:", gmtNY);
@@ -1059,12 +1104,12 @@ void OnTick()
    if(dt.day_of_week == 5 && VentanaViernesPips < 4)
       cancelTime = nyOpen + VentanaViernesPips * 60;
 
-   // Los viernes el mercado cierra a las 22:00 broker — adelantar closeTime
+   // Los viernes adelantar closeTime (CierreViernesBroker, por defecto 22:00 broker)
    // para que el reset se ejecute cuando aun hay ticks disponibles.
    // Si closeTime = 23:00 y el mercado cierra a 22:00, no llegan ticks
    // y el reset nunca ocurre — el lunes arranca con datos del viernes.
-   if(dt.day_of_week == 5)
-      closeTime = 22 * 60;
+   if(dt.day_of_week == 5 && CierreViernesBroker >= 0)
+      closeTime = CierreViernesBroker * 60;
 
    // Correccion para horas que cruzan medianoche (ej. GMT+3: cierre NY = 00:00)
    // Si closeTime es 0 o menor que nyOpen, significa que cae en el dia siguiente
@@ -3184,8 +3229,8 @@ void VLinDisbujar()
    datetime tCancel = inicioDia + cancelHEfectivo * 3600;
    if(tCancel <= tNY) tCancel += 86400; // cruce medianoche
 
-   // Los viernes closeTime = 22:00 broker
-   int closeHEfectivo = (dtA.day_of_week == 5) ? 22 : closeAllH;
+   // Los viernes closeTime = CierreViernesBroker (si esta activo)
+   int closeHEfectivo = (dtA.day_of_week == 5 && CierreViernesBroker >= 0) ? CierreViernesBroker : closeAllH;
    datetime tClose = inicioDia + closeHEfectivo * 3600;
 
    // Linea NY Open
@@ -3582,9 +3627,9 @@ void PanelUpdate()
    // Los viernes ajustar cancelTime igual que en OnTick
    if(dt.day_of_week == 5 && VentanaViernesPips < 4)
       ct = ny + VentanaViernesPips * 60;
-   // Los viernes closeTime = 22:00 (cierre real del mercado)
-   if(dt.day_of_week == 5)
-      cl = 22 * 60;
+   // Los viernes closeTime = CierreViernesBroker (si esta activo)
+   if(dt.day_of_week == 5 && CierreViernesBroker >= 0)
+      cl = CierreViernesBroker * 60;
 
    // Horas para mostrar en panel (sin ajuste de medianoche)
    int ct_disp = ct;
@@ -4237,6 +4282,9 @@ void OnChartEvent(const int id, const long& lparam,
 //      respaldo); paso de lote del broker; si el lote < minimo no se opera
 //      (antes se subia al minimo y se excedia el riesgo)
 //    - Modo de llenado segun el simbolo (SetTypeFillingBySymbol)
+//    - Nuevo input ModoDSTBroker (AUTO/EUROPA/EEUU/NINGUNO). AUTO detecta el
+//      offset real del servidor en vivo; en el tester aplica la regla europea
+//    - Nuevo input CierreViernesBroker (antes 22:00 fijo en el codigo)
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
