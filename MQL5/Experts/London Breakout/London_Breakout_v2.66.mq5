@@ -4135,10 +4135,10 @@ void PanelDestroy()
 //  Archivo: MQL5/Files/RRL_US30_Stats.csv                          
 //  Una fila por dia operado                                         
 //  Columnas:                                                        
-//    Fecha, Dia, Balance_Inicio, Balance_Fin, PnL_USD, PnL_Pct,    
-//    Balas_Total, Balas_TP, Balas_SL, Rango_Pips,                  
-//    CP1_Veces, TP1_Veces, CP3_Veces, TP2_Veces,                   
-//    Limite_Alcanzado, Resultado                                    
+//    Fecha, Dia_Semana, Primera_Bala, Balance_Inicio, Balance_Fin,
+//    PnL_USD, PnL_Pct, Balas_Total, Balas_TP, Balas_SP, Balas_BE,
+//    Balas_SL, Rango_Pips, CP1_BreakEven, TP1_CierreE1, CP3_SP100,
+//    TP2_CierreE2, Limite_Alcanzado, Resultado   (19 columnas)
 //+------------------------------------------------------------------+
 
 #define CSV_FILE "RRL_US30_Stats.csv"
@@ -4319,6 +4319,8 @@ void CSVGenerarReporteMensual(int anio, int mes)
    int    diasNeutral   = 0;
    int    balasTotal    = 0;
    int    balasTP       = 0;
+   int    balasSP       = 0;
+   int    balasBE       = 0;
    int    balasSL       = 0;
    int    limitesAlc    = 0;
    int    cp1Total      = 0;
@@ -4365,6 +4367,10 @@ void CSVGenerarReporteMensual(int anio, int mes)
       double pnlPct   = StringToDouble(FileReadString(handleLec));
       int numBalas    = (int)StringToInteger(FileReadString(handleLec));
       int bTP         = (int)StringToInteger(FileReadString(handleLec));
+      // v2.66: Balas_SP y Balas_BE (anadidas en v2.63) — antes no se leian y el
+      // resto de campos de cada fila quedaba desplazado 2 posiciones
+      int bSP         = (int)StringToInteger(FileReadString(handleLec));
+      int bBE         = (int)StringToInteger(FileReadString(handleLec));
       int bSL         = (int)StringToInteger(FileReadString(handleLec));
       double rango    = StringToDouble(FileReadString(handleLec));
       int cp1         = (int)StringToInteger(FileReadString(handleLec));
@@ -4381,6 +4387,8 @@ void CSVGenerarReporteMensual(int anio, int mes)
       pnlUSDTotal  += pnlUSD;
       balasTotal   += numBalas;
       balasTP      += bTP;
+      balasSP      += bSP;
+      balasBE      += bBE;
       balasSL      += bSL;
       cp1Total     += cp1;
       tp1Total     += tp1;
@@ -4448,6 +4456,8 @@ void CSVGenerarReporteMensual(int anio, int mes)
    FileWrite(handleEsc, "=== BALAS ===");
    FileWrite(handleEsc, "Balas totales",      IntegerToString(balasTotal));
    FileWrite(handleEsc, "Balas TP",           IntegerToString(balasTP));
+   FileWrite(handleEsc, "Balas SP",           IntegerToString(balasSP));
+   FileWrite(handleEsc, "Balas BE",           IntegerToString(balasBE));
    FileWrite(handleEsc, "Balas SL",           IntegerToString(balasSL));
    FileWrite(handleEsc, "Win rate balas",     DoubleToString(winRateBal, 1) + "%");
    FileWrite(handleEsc, "Promedio balas/dia", DoubleToString(diasTotales > 0 ? (double)balasTotal / diasTotales : 0, 1));
@@ -4479,7 +4489,7 @@ void CSVGenerarReporteMensual(int anio, int mes)
    Print(" PnL mes: ", DoubleToString(pnlMesPct, 2), "%",
          " | Dias: ", diasTotales,
          " | Win rate: ", DoubleToString(winRateDias, 1), "%");
-   Print(" Balas: ", balasTotal, " (TP:", balasTP, " SL:", balasSL, ")",
+   Print(" Balas: ", balasTotal, " (TP:", balasTP, " SP:", balasSP, " BE:", balasBE, " SL:", balasSL, ")",
          " | Win balas: ", DoubleToString(winRateBal, 1), "%");
    Print("============================================");
 
@@ -4493,6 +4503,8 @@ void CSVGenerarReporteMensual(int anio, int mes)
       "----------------\n" +
       "🎯 Balas totales: " + IntegerToString(balasTotal) + "\n" +
       "✅ Balas TP     : " + IntegerToString(balasTP) + "\n" +
+      "🔵 Balas SP     : " + IntegerToString(balasSP) + "\n" +
+      "⚪ Balas BE     : " + IntegerToString(balasBE) + "\n" +
       "❌ Balas SL     : " + IntegerToString(balasSL) + "\n" +
       "🎯 Win rate bal : " + DoubleToString(winRateBal,1) + "%\n" +
       "----------------\n" +
@@ -4593,6 +4605,9 @@ void OnChartEvent(const int id, const long& lparam,
 //      posicion se reintenta hasta 10 min antes del reset (alerta si no se logra)
 //    - OnDeinit: cerrar el terminal (REASON_CLOSE, p.ej. reinicio del VPS) o el
 //      grafico ya no cancela las ordenes pendientes; se avisa por Telegram
+//    - Reporte mensual: lee las 19 columnas del CSV (faltaban Balas_SP y
+//      Balas_BE) y muestra SP/BE. Filas escritas antes de v2.63 (17 columnas)
+//      no son compatibles
 //
 //  v2.65 - Mensaje Telegram al inicio de sesion en dias festivos
 //    - CanTradeToday(): al detectar festivo, si nowMin >= londonStart y
