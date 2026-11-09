@@ -16,6 +16,8 @@ Include/SB_Risk.mqh         Lotaje por % riesgo, spread, pérdida diaria, margen
 Include/SB_Executor.mqh     CTrade: órdenes, stops/freeze level, slippage, BE, salida por tiempo
 ```
 
+**Guía de parámetros:** [`MQL5/Experts/SilverBullet/PARAMETROS.md`](MQL5/Experts/SilverBullet/PARAMETROS.md), qué hace cada parámetro y cómo configurarlo.
+
 ### Instalación
 1. Copia la carpeta `MQL5/Experts/SilverBullet` en `<Carpeta de datos MT5>/MQL5/Experts/`.
 2. Compila `SilverBullet.mq5` en MetaEditor (F7).
