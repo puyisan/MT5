@@ -73,7 +73,7 @@ void CWindowDrawer::Init(CNYClock *clock,const bool on,const int days,const int 
    m_days   =MathMax(1,MathMin(days,SB_WD_MAXDAYS));
    m_leadSec=MathMax(0,leadMin)*60;
    m_winOn[0]=winLondon; m_winOn[1]=winAM; m_winOn[2]=winPM;
-   m_name[0]="LONDRES";  m_name[1]="AM";   m_name[2]="PM";
+   m_name[0]="LONDRES";  m_name[1]="NEW YORK AM";   m_name[2]="NEW YORK PM";
    m_base[0]=C'70,130,220';    // azul
    m_base[1]=C'235,150,30';    // naranja
    m_base[2]=C'150,100,210';   // violeta
@@ -234,13 +234,13 @@ void CWindowDrawer::Rebuild(void)
             MakeRect (key+"lead",tLead,tStart,Blend(bg,base,0.07),
                       StringFormat("%s: margen previo de %d min (un barrido aquí ya cuenta)",m_name[i],m_leadSec/60));
             MakeVLine(key+"l0",tLead,base,STYLE_DOT,tip);
-            MakeText (key+"tl",StringFormat(" -%d min",m_leadSec/60),dark,8,tip);
+            MakeText (key+"tl",StringFormat("-%d min ",m_leadSec/60),dark,8,tip);
            }
          MakeRect (key+"band",tStart,tEnd,Blend(bg,base,0.17),tip);
          MakeVLine(key+"l1",tStart,base,STYLE_SOLID,tip);
          MakeVLine(key+"l2",tEnd,base,STYLE_SOLID,tip);
-         MakeText (key+"tn"," "+m_name[i],dark,9,tip);
-         MakeText (key+"th"," "+hours,dark,8,tip);
+         //--- una sola línea: con pantallas HiDPI (Mac/Wine) dos líneas apiladas se solapan
+         MakeText (key+"tn"," "+m_name[i]+"  "+hours,dark,8,tip);
          UpdateRange(m_bands[k]);
         }
      }
@@ -276,21 +276,14 @@ void CWindowDrawer::Reposition(void)
    for(int k=0;k<n;k++)
      {
       const string   key  =m_bands[k].key;
-      const datetime tLead=m_bands[k].lead, tStart=m_bands[k].start;
+      const datetime tStart=m_bands[k].start;
       bool top=true;
       if(m_bands[k].hasBars) top=((pmax-m_bands[k].hi)>=(m_bands[k].lo-pmin));
-      if(top)
-        {
-         PlaceText(key+"tn",tStart,pmax-4*pp, ANCHOR_LEFT_UPPER);
-         PlaceText(key+"th",tStart,pmax-20*pp,ANCHOR_LEFT_UPPER);
-         PlaceText(key+"tl",tLead, pmax-20*pp,ANCHOR_LEFT_UPPER);
-        }
-      else
-        {
-         PlaceText(key+"tn",tStart,pmin+20*pp,ANCHOR_LEFT_LOWER);
-         PlaceText(key+"th",tStart,pmin+4*pp, ANCHOR_LEFT_LOWER);
-         PlaceText(key+"tl",tLead, pmin+4*pp, ANCHOR_LEFT_LOWER);
-        }
+      //--- título a la derecha de la línea de inicio y "-30 min" a su izquierda (dentro del margen
+      //--- previo): misma fila, nunca se tocan
+      const double y=top?pmax-3*pp:pmin+3*pp;
+      PlaceText(key+"tn",tStart,y,top?ANCHOR_LEFT_UPPER:ANCHOR_LEFT_LOWER);
+      PlaceText(key+"tl",tStart,y,top?ANCHOR_RIGHT_UPPER:ANCHOR_RIGHT_LOWER);
      }
    ChartRedraw(0);
   }
