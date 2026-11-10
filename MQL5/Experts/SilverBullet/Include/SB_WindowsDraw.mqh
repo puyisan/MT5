@@ -36,6 +36,9 @@ private:
    bool              m_on;
    int               m_days;
    int               m_leadSec;
+   double            m_hName;    // alto de la línea del nombre (píxeles del gráfico)
+   double            m_hHours;   // alto de la línea del horario
+   double            m_pad;      // margen al borde del gráfico
    bool              m_winOn[SB_MAX_WIN];
    int               m_startMin[SB_MAX_WIN];
    int               m_endMin[SB_MAX_WIN];
@@ -45,6 +48,7 @@ private:
    string            m_dayKeys[];
 
    static color      Blend(const color a,const color b,const double t);
+   static double     LineHeight(const int pts,const int dpi);
    static string     HHMM(const int minutes) { return StringFormat("%02d:%02d",minutes/60,minutes%60); }
    void              MakeRect(const string n,const datetime t1,const datetime t2,const color c,const string tip);
    void              MakeVLine(const string n,const datetime t,const color c,const ENUM_LINE_STYLE st,const string tip);
@@ -54,7 +58,7 @@ private:
    void              DeleteDay(const string dayKey) { ObjectsDeleteAll(0,SB_WD_PREFIX+dayKey); }
 
 public:
-                     CWindowDrawer(void) : m_clock(NULL),m_on(false),m_days(5),m_leadSec(0) {}
+                     CWindowDrawer(void) : m_clock(NULL),m_on(false),m_days(5),m_leadSec(0),m_hName(16),m_hHours(14),m_pad(3) {}
    void              Init(CNYClock *clock,const bool on,const int days,const int leadMin,
                           const bool winLondon,const bool winAM,const bool winPM,
                           const int &startMin[],const int &endMin[]);
@@ -73,13 +77,34 @@ void CWindowDrawer::Init(CNYClock *clock,const bool on,const int days,const int 
    m_days   =MathMax(1,MathMin(days,SB_WD_MAXDAYS));
    m_leadSec=MathMax(0,leadMin)*60;
    m_winOn[0]=winLondon; m_winOn[1]=winAM; m_winOn[2]=winPM;
-   m_name[0]="LONDRES";  m_name[1]="NEW YORK AM";   m_name[2]="NEW YORK PM";
+   m_name[0]="LONDON";  m_name[1]="NEW YORK AM";   m_name[2]="NEW YORK PM";
    m_base[0]=C'70,130,220';    // azul
    m_base[1]=C'235,150,30';    // naranja
    m_base[2]=C'150,100,210';   // violeta
    for(int i=0;i<SB_MAX_WIN;i++) { m_startMin[i]=startMin[i]; m_endMin[i]=endMin[i]; }
+   //--- alto de línea según los DPI de la pantalla (en un Mac Retina el texto mide el doble)
+   int dpi=(int)TerminalInfoInteger(TERMINAL_SCREEN_DPI);
+   if(dpi<=0) dpi=96;
+   m_hName =LineHeight(9,dpi);
+   m_hHours=LineHeight(8,dpi);
+   m_pad   =3.0*dpi/96.0;
    ArrayResize(m_bands,0);
    ArrayResize(m_dayKeys,0);
+  }
+
+//+------------------------------------------------------------------+
+//| Alto de una línea de texto en píxeles: el mayor entre la medida  |
+//| real de la fuente y la estimación por DPI, con margen amplio:    |
+//| solo fija la distancia al borde del gráfico (las dos líneas se   |
+//| apilan por anclaje y nunca se solapan).                          |
+//+------------------------------------------------------------------+
+double CWindowDrawer::LineHeight(const int pts,const int dpi)
+  {
+   double h=pts*dpi/72.0;
+   uint w=0,th=0;
+   if(TextSetFont("Arial",-pts*10) && TextGetSize("LONDON 03:00",w,th) && th>0)
+      h=MathMax(h,(double)th);
+   return MathCeil(h*2.0);
   }
 
 //+------------------------------------------------------------------+
@@ -239,8 +264,8 @@ void CWindowDrawer::Rebuild(void)
          MakeRect (key+"band",tStart,tEnd,Blend(bg,base,0.17),tip);
          MakeVLine(key+"l1",tStart,base,STYLE_SOLID,tip);
          MakeVLine(key+"l2",tEnd,base,STYLE_SOLID,tip);
-         //--- una sola línea: con pantallas HiDPI (Mac/Wine) dos líneas apiladas se solapan
-         MakeText (key+"tn"," "+m_name[i]+"  "+hours,dark,8,tip);
+         MakeText (key+"tn"," "+m_name[i],dark,9,tip);
+         MakeText (key+"th"," "+hours,dark,8,tip);
          UpdateRange(m_bands[k]);
         }
      }
@@ -279,11 +304,14 @@ void CWindowDrawer::Reposition(void)
       const datetime tStart=m_bands[k].start;
       bool top=true;
       if(m_bands[k].hasBars) top=((pmax-m_bands[k].hi)>=(m_bands[k].lo-pmin));
-      //--- título a la derecha de la línea de inicio y "-30 min" a su izquierda (dentro del margen
-      //--- previo): misma fila, nunca se tocan
-      const double y=top?pmax-3*pp:pmin+3*pp;
-      PlaceText(key+"tn",tStart,y,top?ANCHOR_LEFT_UPPER:ANCHOR_LEFT_LOWER);
-      PlaceText(key+"tl",tStart,y,top?ANCHOR_RIGHT_UPPER:ANCHOR_RIGHT_LOWER);
+      //--- dos líneas a la derecha de la línea de inicio: el nombre se apoya ENCIMA de y
+      //--- (ancla inferior) y el horario cuelga DEBAJO (ancla superior). Así nunca se solapan,
+      //--- sea cual sea el tamaño real de la fuente (pantallas Retina). "-30 min" va en la fila
+      //--- del horario, a la izquierda de la línea, dentro del margen previo.
+      const double y=top?pmax-(m_pad+m_hName)*pp:pmin+(m_pad+m_hHours)*pp;
+      PlaceText(key+"tn",tStart,y,ANCHOR_LEFT_LOWER);
+      PlaceText(key+"th",tStart,y,ANCHOR_LEFT_UPPER);
+      PlaceText(key+"tl",tStart,y,ANCHOR_RIGHT_UPPER);
      }
    ChartRedraw(0);
   }
