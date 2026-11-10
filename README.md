@@ -42,6 +42,7 @@ Include/SB_FVG.mqh          Detector de FVG de 3 velas (sin repintado) + ciclo d
 Include/SB_Liquidity.mqh    Pools PDH/PDL, Asia, Londres, NY AM, swings, EQH/EQL + barridos
 Include/SB_Risk.mqh         Lotaje por % riesgo, spread, pérdida diaria, margen
 Include/SB_Executor.mqh     CTrade: órdenes, stops/freeze level, slippage, BE, salida por tiempo
+Include/SB_WindowsDraw.mqh  Franjas de las ventanas en el gráfico (solo visual, v1.12)
 ```
 
 **Guía de parámetros:** [`MQL5/Experts/SilverBullet/PARAMETROS.md`](MQL5/Experts/SilverBullet/PARAMETROS.md), qué hace cada parámetro y cómo configurarlo.
