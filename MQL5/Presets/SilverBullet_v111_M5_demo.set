@@ -1,4 +1,4 @@
-;SilverBullet v1.11 - DEMO en vivo, estrategia M5 (EURUSD.sd)
+;SilverBullet v1.11/v1.12 - DEMO en vivo, estrategia M5 (EURUSD.sd). v1.12 solo agrega las franjas de las ventanas (visual)
 ;Estrategia identica al backtest M5: InpExecTF=M5, InpMaxSLPts=400, InpMaxBarsSweepToFVG=12
 ;Demo: InpRiskPct=1, freno InpMaxDDStopPct=8, avisos activados
 ;Puede convivir con el Silver Bullet M1: magic 20261109 y archivos SilverBullet_M5_*.csv propios
@@ -64,6 +64,8 @@ InpStatusFile=SilverBullet_M5_estado.csv
 InpStatusEveryMin=5
 InpMagic=20261109
 InpDraw=true
+InpDrawWindows=true
+InpDrawWinDays=5
 InpVerbose=true
 InpTesterMinTrades=10
 InpJournal=true

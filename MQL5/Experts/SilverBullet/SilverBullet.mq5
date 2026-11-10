@@ -8,8 +8,8 @@
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.11"
-#define SB_VERSION "1.11"
+#property version   "1.12"
+#define SB_VERSION "1.12"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -20,6 +20,7 @@
 #include "Include\SB_Executor.mqh"
 #include "Include\SB_Journal.mqh"
 #include "Include\SB_Monitor.mqh"
+#include "Include\SB_WindowsDraw.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                           |
@@ -103,6 +104,8 @@ input int             InpStatusEveryMin    = 5;              // Frecuencia del a
 input group "=== General ==="
 input ulong           InpMagic             = 20261108;       // Magic number
 input bool            InpDraw              = true;           // Dibujar FVG / barridos
+input bool            InpDrawWindows       = true;           // Dibujar las franjas de las ventanas (requiere InpDraw)
+input int             InpDrawWinDays       = 5;              // Días hábiles con franjas (incluido hoy, 1-20)
 input bool            InpVerbose           = true;           // Log detallado
 
 input group "=== Optimización ==="
@@ -142,6 +145,7 @@ CExecutor     g_exec;
 CTradeJournal g_journal;
 CNotifier     g_ntf;
 CStatusFile   g_status;
+CWindowDrawer g_wdraw;
 CNewBar       g_barExec, g_barSwing;
 
 int           g_hAtrExec  = INVALID_HANDLE;
@@ -489,6 +493,7 @@ void OnNewExecBar(void)
          g_friCutoff=g_clock.NYToServer(g_clock.NYDay()+InpFridayCloseHourNY*3600+InpFridayCloseMinNY*60);
       Log(StringFormat("Nuevo día NY %s: %d pools de liquidez",
                        TimeToString(g_clock.NYDay(),TIME_DATE),g_liq.Total()));
+      g_wdraw.Rebuild();
      }
    g_liq.OnBar(g_clock,now);
    if(g_barSwing.IsNew(_Symbol,InpSwingTF)) g_liq.UpdateSwings(atrSwing);
@@ -585,11 +590,18 @@ int OnInit()
 
    //--- reloj NY
    g_clock.Init(InpBrokerGMTWinter,InpBrokerDST);
-   g_clock.SetWindow(0,InpWinLondon,180,240);
-   g_clock.SetWindow(1,InpWinAM,    600,660);
-   g_clock.SetWindow(2,InpWinPM,    840,900);
+   const int winStart[SB_MAX_WIN]={180,600,840};   // 03:00, 10:00, 14:00 NY (minutos)
+   const int winEnd[SB_MAX_WIN]  ={240,660,900};   // 04:00, 11:00, 15:00 NY
+   g_clock.SetWindow(0,InpWinLondon,winStart[0],winEnd[0]);
+   g_clock.SetWindow(1,InpWinAM,    winStart[1],winEnd[1]);
+   g_clock.SetWindow(2,InpWinPM,    winStart[2],winEnd[2]);
    g_clock.ValidateLive();
    if(InpValidateHistory && !optimizing) g_clock.ValidateHistory();
+
+   //--- franjas de las ventanas en el gráfico (solo visual)
+   g_wdraw.Init(GetPointer(g_clock),g_draw && InpDrawWindows,InpDrawWinDays,InpSweepLeadMin,
+                InpWinLondon,InpWinAM,InpWinPM,winStart,winEnd);
+   g_wdraw.Rebuild();
 
    //--- indicadores (una sola vez)
    ResetLastError();
@@ -641,8 +653,8 @@ int OnInit()
    if(StringFind(_Symbol,"EURUSD")<0)
       PrintFormat("Aviso: parámetros por defecto calibrados para EURUSD; revisa puntos/ATR para %s",_Symbol);
 
-   PrintFormat("SilverBullet v1.11 iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
-               _Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
+   PrintFormat("SilverBullet v%s iniciado: %s, ejec %s, swings %s, riesgo %.2f%%, broker GMT%+d DST=%s, sesgo %s, prio. barrido >= %d",
+               SB_VERSION,_Symbol,EnumToString(InpExecTF),EnumToString(InpSwingTF),InpRiskPct,
                InpBrokerGMTWinter,EnumToString(InpBrokerDST),EnumToString(InpBiasMode),InpMinSweepPrio);
    //--- no repetir hoy el resumen diario si ya pasó su hora
    {
@@ -852,7 +864,16 @@ void OnTick()
      }
    g_exec.Manage(InpBEAtR,InpBEOffsetPts,InpMaxHoldMin*60);   // barato: sale si no hay posiciones
    if(!g_barExec.IsNew(_Symbol,InpExecTF)) return;
+   g_wdraw.OnNewBar();
    OnNewExecBar();
+  }
+
+//+------------------------------------------------------------------+
+//| Gráfico movido o escalado: recolocar las etiquetas de ventanas   |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam)
+  {
+   if(id==CHARTEVENT_CHART_CHANGE) g_wdraw.Reposition();
   }
 
 //+------------------------------------------------------------------+

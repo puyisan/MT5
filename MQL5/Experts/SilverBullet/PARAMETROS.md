@@ -1,4 +1,4 @@
-# Silver Bullet EA: guía de parámetros (v1.11)
+# Silver Bullet EA: guía de parámetros (v1.12)
 
 Esta guía explica cada parámetro del EA, qué hace, su valor por defecto y cuándo tiene sentido cambiarlo.
 Los valores por defecto están calibrados para **EURUSD.sd en Equiti** (cuenta estándar sin comisión, spread
@@ -288,6 +288,8 @@ es una **ruptura**: el nivel se da por consumido y no hay señal.
 |---|---|---|
 | `InpMagic` | `20261108` | Número que identifica las órdenes de este EA. |
 | `InpDraw` | `true` | Dibuja los FVG y los barridos en el gráfico, con una línea de estado. Se desactiva solo en optimización y en backtests no visuales. |
+| `InpDrawWindows` | `true` | Dibuja una franja por ventana: azul Londres, naranja AM, violeta PM. Los 30 minutos previos van en un tono más claro, con una línea punteada. Cada franja lleva el nombre y el horario NY, arriba o abajo según dónde haya hueco. Solo es visual: no cambia ninguna señal. Necesita `InpDraw=true`. |
+| `InpDrawWinDays` | `5` | Cuántos días hábiles NY se dibujan, incluido hoy (de 1 a 20). Las ventanas de hoy aparecen desde medianoche NY, aunque aún no hayan empezado. |
 | `InpVerbose` | `true` | Mensajes detallados en *Expertos*: ventanas, barridos y motivo de cada descarte. Se desactiva solo en optimización. |
 | `InpTesterMinTrades` | `10` | En optimización, una pasada con menos operaciones puntúa 0 en el criterio personalizado. |
 | `InpJournal` | `true` | Escribe una línea por operación cerrada en el registro CSV. |
