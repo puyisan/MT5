@@ -28,6 +28,19 @@ registro CSV, freno y avisos. **Copia las dos carpetas** (`IntradayMomentum` y `
 
 > El Silver Bullet (abajo) quedó **aparcado**: sin ventaja demostrable fuera de muestra con el spread de la cuenta.
 
+## Silver Bullet 2 (en investigación) – `MQL5/Experts/SilverBullet2/`
+
+Variante **sin barrido** del Silver Bullet: tendencia (cierre de H1 frente a su EMA 50) → FVG de 3 velas de M5
+**a favor** de la tendencia dentro de las ventanas → orden limitada en el borde del FVG, SL detrás de la vela 1 + 1 pip.
+El resto (TP en liquidez, R:R ≥ 2, spread ≤ 20 % del SL, BE a 1R, cierre a las 3 h, viernes) es igual que la v1.13 M5.
+
+- Carpeta independiente con su propia copia de `Include/`: no toca los módulos de `SilverBullet/`, que usa la demo.
+- Magic **20261111** y archivos `SilverBullet2_operaciones.csv` / `SilverBullet2_estado.csv`.
+- Reglas, criterios de aceptación y pasos de prueba en [`PROTOCOLO.md`](MQL5/Experts/SilverBullet2/PROTOCOLO.md):
+  diseño 2021-2024 y validación una sola vez 2025-2026. Preset: `MQL5/Profiles/Tester/SilverBullet2_v200_backtest.set`.
+- Veredicto: `python3 MQL5/Experts/SilverBullet2/analisis/sb2_stats.py <csv> --fase diseno|validacion`.
+- **Copia solo la carpeta `SilverBullet2`** a `MQL5/Experts/` y compila `SilverBullet2.mq5`.
+
 ## Silver Bullet EA (ICT) – `MQL5/Experts/SilverBullet/`
 
 EA para la estrategia **ICT Silver Bullet**: barrido de liquidez (BSL/SSL) → FVG de 3 velas en dirección
