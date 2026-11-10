@@ -1,4 +1,4 @@
-# Silver Bullet EA: guía de parámetros (v1.12)
+# Silver Bullet EA: guía de parámetros (v1.13)
 
 Esta guía explica cada parámetro del EA, qué hace, su valor por defecto y cuándo tiene sentido cambiarlo.
 Los valores por defecto están calibrados para **EURUSD.sd en Equiti** (cuenta estándar sin comisión, spread
@@ -301,6 +301,26 @@ es una **ruptura**: el nivel se da por consumido y no hay señal.
   se cuenta por símbolo y magic; el freno de emergencia, por magic y cuenta.
 - **No adjuntes el EA dos veces al mismo símbolo con el mismo magic:** las dos copias se verían como una sola.
 - **`InpJournalCommon`:** déjalo en `false` si Google Drive sincroniza la carpeta `MQL5/Files`, como ahora.
+
+---
+
+## Reinicios y desconexiones (v1.13)
+
+El EA decide con velas cerradas, así que puede rehacer lo que se perdió. No tiene parámetros.
+
+- **Al arrancar** (adjuntarlo, recompilar, cambiar parámetros, reiniciar MT5), recorre en silencio todas las
+  velas desde la medianoche NY, como haría el tester. Recupera los niveles ya barridos, el barrido en curso,
+  los FVG y si la ventana ya tuvo su operación.
+- **Tras una desconexión** (sin conexión, Mac suspendido), procesa en orden las velas que se saltó,
+  no solo la última.
+- **Si en ese tiempo se formó un setup válido:**
+  - Si la orden limitada **seguiría pendiente** (la ventana no terminó y el precio no tocó la entrada),
+    la coloca ahora. SL, TP y lote se calculan con los datos actuales.
+  - Si el precio **ya pasó por la entrada** o la ventana terminó, **no entra tarde**. Lo anota como setup
+    perdido y avisa por push.
+- **Si ya hay una posición u orden del EA**, la reconoce y la sigue gestionando.
+- En *Expertos* queda una línea `Reconstrucción ...` con el número de velas, el estado y la decisión.
+- **En el tester no cambia nada:** no hay cortes, así que los resultados son idénticos a la 1.12.
 
 ---
 

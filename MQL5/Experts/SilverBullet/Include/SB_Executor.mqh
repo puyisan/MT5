@@ -60,6 +60,8 @@ public:
    double            NormPrice(const double p);
    double            MarketPrice(const int dir);
    ENUM_SB_ORDER_KIND Decide(const int dir,const double entry,const double sl,const double tp,const bool allowMarket);
+   ENUM_SB_ORDER_KIND DecideAt(const int dir,const double entry,const double sl,const double tp,const bool allowMarket,
+                               const double bid,const double ask);
    bool              Place(const ENUM_SB_ORDER_KIND kind,const int dir,const double lots,const double entry,
                            const double sl,const double tp,const datetime expiry,const string comment,ulong &ticket);
    bool              HasPosition(void);
@@ -117,8 +119,14 @@ double CExecutor::MarketPrice(const int dir)
 ENUM_SB_ORDER_KIND CExecutor::Decide(const int dir,const double entry,const double sl,const double tp,const bool allowMarket)
   {
    if(!m_sym.RefreshRates()) return KIND_INVALID;
+   return DecideAt(dir,entry,sl,tp,allowMarket,m_sym.Bid(),m_sym.Ask());
+  }
+
+//--- misma decisión con precios dados (reconstrucción de velas pasadas)
+ENUM_SB_ORDER_KIND CExecutor::DecideAt(const int dir,const double entry,const double sl,const double tp,const bool allowMarket,
+                                       const double bid,const double ask)
+  {
    const double md=MinDist();
-   const double ask=m_sym.Ask(), bid=m_sym.Bid();
    if(dir>0)
      {
       if(entry-sl<md || tp-entry<md) return KIND_INVALID;

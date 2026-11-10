@@ -6,10 +6,14 @@
 //|  Calibrado por defecto para EURUSD en Equiti (cuenta hedging).   |
 //|  Toda la lógica de señal corre 1 vez por vela cerrada del TF de  |
 //|  ejecución; en cada tick solo se gestiona BE / salida por tiempo.|
+//|                                                                  |
+//|  En vivo, al arrancar reconstruye el día NY vela a vela (como el |
+//|  tester) y, tras una desconexión, procesa las velas que se saltó:|
+//|  así un reinicio no pierde barridos, FVG ni el estado de ventana.|
 //+------------------------------------------------------------------+
 #property copyright "puyisan"
-#property version   "1.12"
-#define SB_VERSION "1.12"
+#property version   "1.13"
+#define SB_VERSION "1.13"
 #property description "ICT Silver Bullet - Liquidity sweep + 3-candle FVG (NY time, DST-safe)"
 
 #include "Include\SB_Defines.mqh"
@@ -172,6 +176,24 @@ double        g_mssLevel  = 0.0;
 bool          g_mssOk     = false;
 
 bool          g_verbose   = true;
+
+//--- reconstrucción de velas pasadas (solo en vivo)
+struct SReplayCand
+  {
+   bool              on;
+   bool              market;     // habría sido a mercado (no reproducible a otro precio)
+   int               w;
+   int               dir;
+   datetime          t;          // cierre de la vela del FVG
+   double            entry;
+   SFVG              f;
+  };
+bool          g_replay      = false;    // procesando velas pasadas: sin órdenes, avisos ni log detallado
+bool          g_needRebuild = false;    // en vivo: reconstruir el día en el primer tick
+datetime      g_lastBar     = 0;        // apertura de la última vela de ejecución procesada
+datetime      g_lastSwingT  = 0;        // reconstrucción: última vela de swings procesada
+datetime      g_now         = 0;        // "ahora" de la vela que se procesa
+SReplayCand   g_cand;                   // setup que habría puesto orden durante la reconstrucción
 bool          g_draw      = false;
 
 //--- embudo de diagnóstico (se imprime al terminar el backtest / quitar el EA)
@@ -194,9 +216,10 @@ SFunnel       g_fn;
 void KillInit(void);
 void CheckKill(void);
 void WriteStatus(const string forceState);
+void RunBars(const bool newBar);
 
 //+------------------------------------------------------------------+
-void Log(const string s) { if(g_verbose) Print(s); }
+void Log(const string s) { if(g_verbose && !g_replay) Print(s); }
 
 string StateToString(const ENUM_SB_STATE s)
   {
@@ -215,6 +238,15 @@ bool ReadATR(const int handle,double &val)
   {
    ResetLastError();
    if(CopyBuffer(handle,0,1,1,g_buf)!=1) return false;
+   val=g_buf[0];
+   return(val>0.0);
+  }
+
+//--- ATR de la vela que abrió en 't' (o de la última anterior)
+bool ReadATRAt(const int handle,const datetime t,double &val)
+  {
+   ResetLastError();
+   if(CopyBuffer(handle,0,t,1,g_buf)!=1) return false;
    val=g_buf[0];
    return(val>0.0);
   }
@@ -305,7 +337,7 @@ void UpdateMSS(const MqlRates &bar)
 //+------------------------------------------------------------------+
 void OnWindowChange(const int w)
   {
-   if(g_state==SB_ORDER_PLACED && g_exec.HasPending())
+   if(!g_replay && g_state==SB_ORDER_PLACED && g_exec.HasPending())
      {
       g_exec.CancelPendings();
       g_fn.expired++;
@@ -330,13 +362,19 @@ void TryEnter(const int w,const SFVG &f)
   {
    if(g_killed)
      { g_fn.rejKill++; Log("Entrada descartada: freno de emergencia activo"); return; }
-   if(g_friCutoff>0 && TimeCurrent()>=g_friCutoff)
+   if(g_friCutoff>0 && (g_replay?g_now:TimeCurrent())>=g_friCutoff)
      { g_fn.rejFriday++; Log("Entrada descartada: pasado el cierre forzoso del viernes"); return; }
-   if(g_exec.HasPosition() || g_exec.HasPending())
+   if(!g_replay && (g_exec.HasPosition() || g_exec.HasPending()))
      { g_fn.rejExposure++; Log("Entrada descartada: ya hay exposición del EA"); return; }
 
    int spreadPts=0;
-   const bool absOk=g_risk.SpreadOK(spreadPts);
+   bool absOk=true;
+   if(g_replay)
+     {
+      spreadPts=(int)g_rates[0].spread;                           // spread de la vela reconstruida
+      absOk=(InpMaxSpreadAbsPts<=0 || spreadPts<=InpMaxSpreadAbsPts);
+     }
+   else absOk=g_risk.SpreadOK(spreadPts);
    g_fn.spreadN++; g_fn.spreadSum+=spreadPts;
    if(g_fn.spreadN==1 || spreadPts<g_fn.spreadMin) g_fn.spreadMin=spreadPts;
    if(spreadPts>g_fn.spreadMax) g_fn.spreadMax=spreadPts;
@@ -378,9 +416,20 @@ void TryEnter(const int w,const SFVG &f)
      { g_fn.rejRR++; Log(StringFormat("Entrada descartada: R:R %.2f < %.2f (objetivo %s)",rr,InpMinRR,hasTarget?"pool":"fijo")); return; }
 
    //--- tipo de orden
-   const ENUM_SB_ORDER_KIND kind=g_exec.Decide(dir,entry,sl,tp,InpAllowMarketIfInside);
+   const ENUM_SB_ORDER_KIND kind=g_replay
+      ?g_exec.DecideAt(dir,entry,sl,tp,InpAllowMarketIfInside,g_rates[0].close,g_rates[0].close+spread)
+      :g_exec.Decide(dir,entry,sl,tp,InpAllowMarketIfInside);
    if(kind==KIND_INVALID)
      { g_fn.rejKind++; Log("Entrada descartada: precio/distancias no válidas para la orden (stops/freeze level)"); return; }
+   //--- reconstrucción: aquí se habría enviado la orden; se anota y se decide al terminar
+   if(g_replay)
+     {
+      if(!g_risk.DailyLossOK(g_clock.NYMidnightServer())) { g_fn.rejDaily++; return; }
+      g_cand.on=true; g_cand.market=(kind==KIND_MARKET); g_cand.w=w; g_cand.dir=dir;
+      g_cand.t=g_now; g_cand.entry=entry; g_cand.f=f;
+      g_state=SB_ORDER_PLACED;
+      return;
+     }
    double effEntry=entry;
    if(kind==KIND_MARKET)
      {
@@ -469,21 +518,36 @@ void EvaluateFVG(const int w,const SFVG &f)
 
 //+------------------------------------------------------------------+
 //| Lógica principal: 1 vez por vela cerrada del TF de ejecución     |
+//| replayBar=0: la última vela cerrada (en vivo y en el tester).    |
+//| replayBar>0: vela pasada que abrió a esa hora (reconstrucción).  |
 //+------------------------------------------------------------------+
-void OnNewExecBar(void)
+void ProcessBar(const datetime replayBar)
   {
-   const datetime now=TimeCurrent();
-
+   const bool rp=(replayBar>0);
+   datetime now=0;
    double atrExec=0.0, atrSwing=0.0;
-   if(!ReadATR(g_hAtrExec,atrExec) || !ReadATR(g_hAtrSwing,atrSwing)) return;   // ATR aún no calculado
-   ResetLastError();
-   if(CopyRates(_Symbol,InpExecTF,1,3,g_rates)!=3)
-     { Log(StringFormat("CopyRates falló (err=%d)",GetLastError())); return; }
+   if(!rp)
+     {
+      now=TimeCurrent();
+      if(!ReadATR(g_hAtrExec,atrExec) || !ReadATR(g_hAtrSwing,atrSwing)) return;   // ATR aún no calculado
+      ResetLastError();
+      if(CopyRates(_Symbol,InpExecTF,1,3,g_rates)!=3)
+        { Log(StringFormat("CopyRates falló (err=%d)",GetLastError())); return; }
+     }
+   else
+     {
+      now=replayBar+PeriodSeconds(InpExecTF);                     // cierre de esa vela
+      if(CopyRates(_Symbol,InpExecTF,replayBar,3,g_rates)!=3 || g_rates[0].time!=replayBar) return;
+      if(!ReadATRAt(g_hAtrExec,replayBar,atrExec) ||
+         !ReadATRAt(g_hAtrSwing,now-PeriodSeconds(InpSwingTF),atrSwing)) return;
+     }
+   g_now    =now;
+   g_lastBar=g_rates[0].time;
 
    //--- contexto diario y liquidez
    if(g_clock.RefreshDay(now))
      {
-      g_liq.OnNewDay(g_clock,now,atrSwing);
+      g_liq.OnNewDay(g_clock,now,atrSwing,rp);
       g_fvg.Reset();
       g_fn.days++;
       //--- cierre forzoso del viernes (evita gaps de fin de semana con la posición abierta)
@@ -496,10 +560,19 @@ void OnNewExecBar(void)
       g_wdraw.Rebuild();
      }
    g_liq.OnBar(g_clock,now);
-   if(g_barSwing.IsNew(_Symbol,InpSwingTF)) g_liq.UpdateSwings(atrSwing);
+   if(!rp)
+     {
+      if(g_barSwing.IsNew(_Symbol,InpSwingTF)) g_liq.UpdateSwings(atrSwing);
+     }
+   else
+     {
+      const int      perS  =PeriodSeconds(InpSwingTF);
+      const datetime swOpen=(datetime)(((long)now/perS)*perS-perS);   // última vela de swings cerrada
+      if(swOpen!=g_lastSwingT) { g_lastSwingT=swOpen; g_liq.UpdateSwingsAt(now,atrSwing); }
+     }
 
    //--- detección (siempre, para mantener estados de FVG y pools)
-   const double spread=g_risk.CurrentSpreadPts()*_Point;
+   const double spread=(rp?(double)g_rates[0].spread:(double)g_risk.CurrentSpreadPts())*_Point;
    SFVG f;        ZeroMemory(f);
    SSweepEvent e; ZeroMemory(e);
    const bool hasFvg  =g_fvg.OnNewBar(g_rates,atrExec,spread,f);
@@ -558,11 +631,13 @@ void OnNewExecBar(void)
         }
 
       case SB_ORDER_PLACED:
+         if(rp) break;                                // reconstrucción: se resuelve al terminar
          if(g_exec.HasPosition())     { g_fn.filled++;  g_state=SB_IN_TRADE; Log("Orden limitada ejecutada"); }
          else if(!g_exec.HasPending()) { g_fn.expired++; g_state=SB_DONE;     Log("Orden pendiente expirada/cancelada"); }
          break;
 
       case SB_IN_TRADE:
+         if(rp) break;
          if(!g_exec.HasPosition()) { g_state=SB_DONE; Log("Posición cerrada. Ventana consumida."); }
          break;
 
@@ -646,6 +721,9 @@ int OnInit()
    ZeroMemory(g_sweep);
    ZeroMemory(g_fn);
    g_state=SB_IDLE; g_win=-1;
+   ZeroMemory(g_cand);
+   g_replay=false; g_lastBar=0; g_lastSwingT=0;
+   g_needRebuild=!tester;                     // en vivo: reconstruir el día NY en el primer tick
 
    //--- avisos de entorno
    if((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
@@ -863,9 +941,134 @@ void OnTick()
       if(!g_exec.HasPosition()) g_friDone=true;     // si algo falló, reintenta en el siguiente tick
      }
    g_exec.Manage(InpBEAtR,InpBEOffsetPts,InpMaxHoldMin*60);   // barato: sale si no hay posiciones
-   if(!g_barExec.IsNew(_Symbol,InpExecTF)) return;
+   const bool newBar=g_barExec.IsNew(_Symbol,InpExecTF);
+   if(!newBar && !g_needRebuild) return;
    g_wdraw.OnNewBar();
-   OnNewExecBar();
+   RunBars(newBar);
+  }
+
+//+------------------------------------------------------------------+
+//| Reconstrucción tras un arranque o una desconexión (solo en vivo) |
+//+------------------------------------------------------------------+
+//--- última vela del día NY anterior: al procesarla cambia el día, igual que en vivo y en el tester
+datetime DayReplayStart(void)
+  {
+   const datetime ny =g_clock.ServerToNY(TimeCurrent());
+   const datetime mid=(datetime)(ny-(ny%86400));
+   return g_clock.NYToServer(mid)-PeriodSeconds(InpExecTF);
+  }
+
+//--- ¿envió el EA alguna orden (ejecutada, caducada o cancelada) entre 'from' y 'to'?
+bool EAActedBetween(const datetime from,const datetime to)
+  {
+   if(!HistorySelect(from,TimeCurrent()+60)) return false;   // por fecha de cierre; se filtra por la de envío
+   const int no=HistoryOrdersTotal();
+   for(int i=0;i<no;i++)
+     {
+      const ulong o=HistoryOrderGetTicket(i);
+      if(o==0) continue;
+      if(HistoryOrderGetInteger(o,ORDER_MAGIC)!=(long)InpMagic) continue;
+      if(HistoryOrderGetString(o,ORDER_SYMBOL)!=_Symbol) continue;
+      const datetime t=(datetime)HistoryOrderGetInteger(o,ORDER_TIME_SETUP);
+      if(t>=from && t<=to) return true;
+     }
+   return false;
+  }
+
+//--- ¿pasó ya el precio por la entrada del setup reconstruido? (la orden se habría ejecutado)
+bool EntryTouched(void)
+  {
+   MqlRates r[];
+   ArraySetAsSeries(r,false);
+   const int n=CopyRates(_Symbol,InpExecTF,g_cand.t,TimeCurrent(),r);
+   for(int i=0;i<n;i++)
+      if((g_cand.dir>0 && r[i].low<=g_cand.entry) || (g_cand.dir<0 && r[i].high>=g_cand.entry)) return true;
+   const double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   return (g_cand.dir>0)?(ask>0.0 && ask<=g_cand.entry):(bid>0.0 && bid>=g_cand.entry);
+  }
+
+//--- decide qué hacer con lo reconstruido y lo deja en el log
+void ResolveReplay(const int bars,const bool startup)
+  {
+   string note="";
+   const string cw=g_clock.WindowName(g_cand.w);
+   if(g_exec.HasPosition() || g_exec.HasPending())
+     {
+      //--- posición u orden del EA que sigue viva: se adopta y se sigue gestionando
+      if(g_win>=0) g_state=g_exec.HasPosition()?SB_IN_TRADE:SB_ORDER_PLACED;
+      note=g_exec.HasPosition()?"posición del EA abierta: se sigue gestionando":"orden pendiente del EA: se sigue vigilando";
+     }
+   else if(g_win>=0 && EAActedBetween(g_clock.WindowStart(g_win)-InpSweepLeadMin*60,TimeCurrent()))
+     {
+      g_state=SB_DONE;
+      note="esta ventana ya tuvo su operación";
+     }
+   else if(g_cand.on)
+     {
+      const datetime fvgNY=g_clock.ServerToNY(g_cand.t);
+      const bool sameWin=(g_cand.w==g_win && g_win>=0 && TimeCurrent()<g_clock.WindowEnd(g_win));
+      if(sameWin && !g_cand.market && !EntryTouched())
+        {
+         g_state=SB_SWEPT;                                    // el barrido sigue en g_sweep
+         TryEnter(g_win,g_cand.f);                            // en vivo: SL, TP y lotes con datos actuales
+         note=(g_state==SB_ORDER_PLACED || g_state==SB_IN_TRADE)
+              ?StringFormat("setup de las %s NY recuperado: orden colocada",TimeToString(fvgNY,TIME_MINUTES))
+              :StringFormat("setup de las %s NY recuperado, pero los filtros actuales lo rechazan",TimeToString(fvgNY,TIME_MINUTES));
+         g_ntf.Send("Reconstrucción: "+note);
+        }
+      else if(!EAActedBetween(g_cand.t-2*3600,g_cand.t+2*3600))
+        {
+         if(sameWin) g_state=SB_DONE;
+         const string why=!sameWin?"la ventana ya terminó"
+                         :(g_cand.market?"habría entrado a mercado":"el precio ya pasó por la entrada");
+         note=StringFormat("setup %s %s de las %s NY perdido mientras el EA no estaba activo (%s)",
+                           cw,(g_cand.dir>0)?"COMPRA":"VENTA",TimeToString(fvgNY,TIME_MINUTES),why);
+         g_ntf.Send("Reconstrucción: "+note);
+        }
+      else if(sameWin) g_state=SB_DONE;
+     }
+   g_cand.on=false;
+   PrintFormat("Reconstrucción %s: %d velas M%d procesadas. Pools %d · ventana %s · estado %s%s%s",
+               startup?"del día":"tras desconexión",bars,PeriodSeconds(InpExecTF)/60,g_liq.Total(),
+               g_clock.WindowName(g_win),StateToString(g_state),
+               (g_state==SB_SWEPT)?StringFormat(" (barrido %s @%.5f)",PoolTypeToString(g_sweep.type),g_sweep.price):"",
+               (note!="")?" · "+note:"");
+  }
+
+//--- procesa las velas cerradas pendientes: las antiguas en reconstrucción y la última en vivo
+void RunBars(const bool newBar)
+  {
+   if(g_isTester) { ProcessBar(0); return; }           // en el tester no hay cortes: idéntico a la 1.12
+   //--- indicadores aún calculando (justo tras adjuntar): se reintenta en el siguiente tick/vela
+   if(BarsCalculated(g_hAtrExec)<=0 || BarsCalculated(g_hAtrSwing)<=0) return;
+
+   const int      per    =PeriodSeconds(InpExecTF);
+   const bool     startup=g_needRebuild;
+   const datetime last   =iTime(_Symbol,InpExecTF,1);   // última vela cerrada
+   datetime from=0;
+   if(startup)          from=DayReplayStart();
+   else if(g_lastBar>0) from=g_lastBar+per;
+   if(!startup && from>0 && last-from>2*86400) from=DayReplayStart();   // corte muy largo: rehacer el día
+   g_needRebuild=false;
+
+   int done=0;
+   const datetime stop=newBar?last-1:last;              // con vela nueva, la última va en vivo
+   if(from>0 && last>0 && stop>=from)
+     {
+      MqlRates r[];
+      ArraySetAsSeries(r,false);
+      const int n=CopyRates(_Symbol,InpExecTF,from,stop,r);
+      if(n>0)
+        {
+         g_cand.on=false;
+         g_replay=true;
+         for(int i=0;i<n;i++) ProcessBar(r[i].time);
+         g_replay=false;
+         done=n;
+        }
+     }
+   if(done>0 || startup) ResolveReplay(done,startup);
+   if(newBar) ProcessBar(0);
   }
 
 //+------------------------------------------------------------------+

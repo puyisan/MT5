@@ -48,7 +48,8 @@ private:
    bool              IsPivot(const MqlRates &r[],const int c,const int n,const bool high) const;
    void              MergeOrAdd(const int side,const double px,const datetime pivotT,
                                 const datetime formed,const double tol);
-   void              Replay(const datetime now,const double atr);
+   void              Replay(const datetime now,const double atr,const bool anchored);
+   void              SwingsFromBuffer(const double atrSwing);
    void              Compact(void);
 
 public:
@@ -56,9 +57,10 @@ public:
    void              Init(const ENUM_TIMEFRAMES swingTF,const int swingN,const int reclaimBars,
                           const double minPenPts,const double maxPenATR,const double eqTolATR,
                           const bool useSwings);
-   void              OnNewDay(CNYClock &clk,const datetime now,const double atrSwing);
+   void              OnNewDay(CNYClock &clk,const datetime now,const double atrSwing,const bool anchored=false);
    void              OnBar(CNYClock &clk,const datetime now);
    void              UpdateSwings(const double atrSwing);
+   void              UpdateSwingsAt(const datetime now,const double atrSwing);   // reconstrucción
    bool              CheckSweeps(const MqlRates &bar,const double atrExec,SSweepEvent &ev);
    bool              NearestTarget(const int tradeDir,const double entry,const int minPrio,double &target) const;
    int               Total(void) const { return ArraySize(m_pools); }
@@ -207,14 +209,17 @@ void CLiquidityMap::MergeOrAdd(const int side,const double px,const datetime piv
 //| Reproduce ~36h del TF de swings en orden cronológico:            |
 //| añade swings al confirmarse y consume los pools ya tomados.      |
 //| Solo se ejecuta 1 vez por día NY.                                |
+//| anchored=true: termina en 'now' (reconstrucción de velas pasadas)|
+//| en vez de en la última vela cerrada.                             |
 //+------------------------------------------------------------------+
-void CLiquidityMap::Replay(const datetime now,const double atr)
+void CLiquidityMap::Replay(const datetime now,const double atr,const bool anchored)
   {
    const int per=PeriodSeconds(m_swingTF);
    const int lookback=(int)MathMin(600,36*3600/per);
    MqlRates r[];
    ArraySetAsSeries(r,false);
-   int n=CopyRates(_Symbol,m_swingTF,1,lookback,r);       // ascendente
+   int n=anchored?CopyRates(_Symbol,m_swingTF,now-per,lookback,r)    // ascendente
+                 :CopyRates(_Symbol,m_swingTF,1,lookback,r);
    if(n<=2*m_swingN) return;
    const double tol=m_eqTolATR*atr;
 
@@ -255,7 +260,7 @@ void CLiquidityMap::Compact(void)
 //+------------------------------------------------------------------+
 //| Reconstrucción diaria (00:00 NY o arranque del EA)               |
 //+------------------------------------------------------------------+
-void CLiquidityMap::OnNewDay(CNYClock &clk,const datetime now,const double atrSwing)
+void CLiquidityMap::OnNewDay(CNYClock &clk,const datetime now,const double atrSwing,const bool anchored)
   {
    ArrayResize(m_pools,0);
    m_pdh=0; m_pdl=0;
@@ -282,7 +287,7 @@ void CLiquidityMap::OnNewDay(CNYClock &clk,const datetime now,const double atrSw
    //--- Asia: 20:00 (día previo) -> 00:00 NY
    BuildSession(clk,now,-240,0,POOL_ASIA_H,POOL_ASIA_L,3);
    //--- swings + consumo de pools ya tomados
-   Replay(now,atrSwing);
+   Replay(now,atrSwing,anchored);
   }
 
 //+------------------------------------------------------------------+
@@ -311,6 +316,20 @@ void CLiquidityMap::UpdateSwings(const double atrSwing)
    if(!m_useSwings) return;
    const int cnt=2*m_swingN+1;
    if(CopyRates(_Symbol,m_swingTF,1,cnt,m_sw)!=cnt) return;   // serie: [0] = última cerrada
+   SwingsFromBuffer(atrSwing);
+  }
+
+//--- igual, pero con la última vela de swings cerrada en 'now' (reconstrucción)
+void CLiquidityMap::UpdateSwingsAt(const datetime now,const double atrSwing)
+  {
+   if(!m_useSwings) return;
+   const int cnt=2*m_swingN+1;
+   if(CopyRates(_Symbol,m_swingTF,now-PeriodSeconds(m_swingTF),cnt,m_sw)!=cnt) return;
+   SwingsFromBuffer(atrSwing);
+  }
+
+void CLiquidityMap::SwingsFromBuffer(const double atrSwing)
+  {
    const int c=m_swingN;
    const datetime formed=m_sw[0].time+PeriodSeconds(m_swingTF);
    const double tol=m_eqTolATR*atrSwing;
