@@ -259,11 +259,24 @@ void DrawFVG(const SFVG &f)
    if(!g_draw) return;
    const string n=StringFormat("%sFVG_%I64d",SB_OBJ_PREFIX,(long)f.tC3);
    const datetime t2=f.tC3+(datetime)(PeriodSeconds(InpExecTF)*InpFVGExpiryBars);
+   //--- relleno suave (acorde con las franjas) + borde fino en el color de la dirección
+   const color dirCol=(f.dir>0)?clrSeaGreen:clrIndianRed;
+   const color bg    =(color)ChartGetInteger(0,CHART_COLOR_BACKGROUND);
+   const string tip  =StringFormat("FVG %s %.5f-%.5f",(f.dir>0)?"alcista":"bajista",f.bottom,f.top);
    if(!ObjectCreate(0,n,OBJ_RECTANGLE,0,f.tC1,f.top,t2,f.bottom)) return;
-   ObjectSetInteger(0,n,OBJPROP_COLOR,(f.dir>0)?clrSeaGreen:clrIndianRed);
+   ObjectSetInteger(0,n,OBJPROP_COLOR,CWindowDrawer::Blend(bg,dirCol,0.30));
    ObjectSetInteger(0,n,OBJPROP_FILL,true);
    ObjectSetInteger(0,n,OBJPROP_BACK,true);
    ObjectSetInteger(0,n,OBJPROP_SELECTABLE,false);
+   ObjectSetString(0,n,OBJPROP_TOOLTIP,tip);
+   const string nb=n+"_b";
+   if(!ObjectCreate(0,nb,OBJ_RECTANGLE,0,f.tC1,f.top,t2,f.bottom)) return;
+   ObjectSetInteger(0,nb,OBJPROP_COLOR,dirCol);
+   ObjectSetInteger(0,nb,OBJPROP_FILL,false);
+   ObjectSetInteger(0,nb,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,nb,OBJPROP_BACK,true);
+   ObjectSetInteger(0,nb,OBJPROP_SELECTABLE,false);
+   ObjectSetString(0,nb,OBJPROP_TOOLTIP,tip);
   }
 
 void DrawSweep(const SSweepEvent &e)

@@ -287,7 +287,7 @@ es una **ruptura**: el nivel se da por consumido y no hay señal.
 | Parámetro | Por defecto | Qué hace |
 |---|---|---|
 | `InpMagic` | `20261108` | Número que identifica las órdenes de este EA. |
-| `InpDraw` | `true` | Dibuja los FVG y los barridos en el gráfico, con una línea de estado. Se desactiva solo en optimización y en backtests no visuales. |
+| `InpDraw` | `true` | Dibuja los FVG y los barridos en el gráfico, con una línea de estado. Los FVG van en tono suave con borde fino: verde los alcistas, rojo los bajistas. Se desactiva solo en optimización y en backtests no visuales. |
 | `InpDrawWindows` | `true` | Dibuja una franja por ventana: azul LONDON, naranja NEW YORK AM y violeta NEW YORK PM. Los 30 minutos previos van en un tono más claro, con una línea punteada y el texto «-30 min». Cada franja lleva una etiqueta de dos líneas (nombre y, debajo, el horario NY), arriba o abajo según dónde haya hueco. Solo es visual: no cambia ninguna señal. Necesita `InpDraw=true`. |
 | `InpDrawWinDays` | `5` | Cuántos días hábiles NY se dibujan, incluido hoy (de 1 a 20). Las ventanas de hoy aparecen desde medianoche NY, aunque aún no hayan empezado. |
 | `InpVerbose` | `true` | Mensajes detallados en *Expertos*: ventanas, barridos y motivo de cada descarte. Se desactiva solo en optimización. |

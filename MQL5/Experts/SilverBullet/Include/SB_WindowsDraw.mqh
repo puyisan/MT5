@@ -47,7 +47,6 @@ private:
    SWinBand          m_bands[];
    string            m_dayKeys[];
 
-   static color      Blend(const color a,const color b,const double t);
    static double     LineHeight(const int pts,const int dpi);
    static string     HHMM(const int minutes) { return StringFormat("%02d:%02d",minutes/60,minutes%60); }
    void              MakeRect(const string n,const datetime t1,const datetime t2,const color c,const string tip);
@@ -58,6 +57,7 @@ private:
    void              DeleteDay(const string dayKey) { ObjectsDeleteAll(0,SB_WD_PREFIX+dayKey); }
 
 public:
+   static color      Blend(const color a,const color b,const double t);   // también la usan los FVG
                      CWindowDrawer(void) : m_clock(NULL),m_on(false),m_days(5),m_leadSec(0),m_hName(16),m_hHours(14),m_pad(3) {}
    void              Init(CNYClock *clock,const bool on,const int days,const int leadMin,
                           const bool winLondon,const bool winAM,const bool winPM,
